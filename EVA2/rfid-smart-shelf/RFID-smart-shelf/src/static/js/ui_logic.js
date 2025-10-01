@@ -1,0 +1,2409 @@
+// --- Cell Preview: แสดงรายละเอียดช่องที่เลือก (IMPROVED DESIGN) ---
+function renderCellPreview({ level, block, lots, targetLotNo, isPlaceJob = false, newLotTrayCount = 0 }) {
+    const container = document.getElementById('cellPreviewContainer');
+    if (!container) return;
+
+    // lots: array of {lot_no, tray_count}
+    if (!Array.isArray(lots)) lots = [];
+
+    // ถ้าเป็น Place job ให้จำลองการวางของใหม่
+    let previewLots = [...lots];
+    if (isPlaceJob && targetLotNo && newLotTrayCount > 0) {
+        // เพิ่ม lot ใหม่ที่จะวางลงไปด้านบน (LIFO)
+        previewLots.push({
+            lot_no: targetLotNo,
+            tray_count: newLotTrayCount
+        });
+    }
+
+    let html = '';
+    html += `<h3>Level ${level} Block ${block}</h3>`;
+    
+    // แสดงข้อความแตกต่างกันตาม action
+ 
+    
+    html += `<div class="block-preview">`;
+
+    if (previewLots.length > 0) {
+        // สร้างรายการ lot แนวตั้ง (จากล่างขึ้นบน)
+        for (let i = previewLots.length - 1; i >= 0; i--) {
+            const lot = previewLots[i];
+            const trayCount = parseInt(lot.tray_count) || 0;
+            const isTarget = lot.lot_no === targetLotNo;
+            const isNewLot = isPlaceJob && i === previewLots.length - 1 && isTarget;
+
+            // คำนวณความสูงตามสัดส่วน tray_count เทียบกับความจุจริงของ cell
+            const maxCapacity = getCellCapacity(level, block); // ใช้ความจุจริงของ cell แทนค่าคงที่ 24
+            const maxContainerHeight = 300; // ความสูงที่ใช้ได้ของ container (350px - padding)
+            const heightRatio = trayCount / maxCapacity;
+            const height = Math.max(heightRatio * maxContainerHeight, 8); // ลดความสูงขั้นต่ำเป็น 8px เพื่อให้แสดงสัดส่วนที่ถูกต้อง
+
+            // ตัดชื่อ lot ถ้ายาวเกินไป (สำหรับ desktop ใช้ 15 ตัวอักษร)
+            const displayName = lot.lot_no.length > 15 ?
+                lot.lot_no.substring(0, 15) + '...' :
+                lot.lot_no;
+
+            let itemClass = 'lot-item';
+            if (isTarget) itemClass += ' target-lot';
+            if (isNewLot) itemClass += ' new-lot';
+
+            html += `<div class="${itemClass}" style="height: ${height}px;" title="${lot.lot_no} - ${trayCount} trays">`;
+            html += `<span class="lot-name">${displayName}</span>`;
+            if (isNewLot) {
+                html += `<span class="new-badge"> NEW</span>`;
+            }
+            html += `</div>`;
+        }
+    } else {
+        html += `<div class="lot-item empty-slot">`;
+        html += `<span class="lot-name">(empty)</span>`;
+        html += `</div>`;
+    }
+
+    html += `</div>`;
+    container.innerHTML = html;
+}
+// Utility: Get lots in a specific cell (level, block)
+function getLotsInCell(level, block) {
+    const shelfState = JSON.parse(localStorage.getItem(GLOBAL_SHELF_STATE_KEY) || '[]');
+    for (const cellData of shelfState) {
+        let cellLevel, cellBlock, cellLots;
+        if (Array.isArray(cellData)) {
+            cellLevel = cellData[0];
+            cellBlock = cellData[1];
+            cellLots = cellData[2];
+        } else if (cellData && typeof cellData === 'object') {
+            ({ level: cellLevel, block: cellBlock, lots: cellLots } = cellData);
+        }
+        if (String(cellLevel) === String(level) && String(cellBlock) === String(block)) {
+            return Array.isArray(cellLots) ? cellLots : [];
+        }
+    }
+    return [];
+}
+
+// Utility: Get cell capacity (actual max trays for a specific cell)
+function getCellCapacity(level, block) {
+    // ค่าความจุเริ่มต้นสำหรับแต่ละ cell (สามารถปรับแก้ได้ตามความต้องการ)
+    const cellCapacities = {
+        '1-1': 22, // Level 1 Block 1 = 22 trays
+        '1-2': 24, // Level 1 Block 2 = 24 trays  
+        '1-3': 24, // Level 1 Block 3 = 24 trays
+        '1-4': 24, // Level 1 Block 4 = 24 trays
+        '1-5': 24, // Level 1 Block 5 = 24 trays
+        // เพิ่มข้อมูลความจุของ cell อื่นๆ ตามความต้องการ
+    };
+    
+    const cellKey = `${level}-${block}`;
+    return cellCapacities[cellKey] || 24; // ถ้าไม่มีข้อมูล ใช้ 24 เป็นค่าเริ่มต้น
+}
+
+// Example usage: log lots in Level 1, Block 2
+// console.log(getLotsInCell(1, 2));
+        /**
+         * แสดงไฟฟ้าทุกช่องที่มี job ใน queue (queueSelectionView)
+         */
+        function controlLEDByQueue() {
+            const queue = getQueue();
+            if (!queue || queue.length === 0) {
+                fetch('/api/led/clear', { method: 'POST' });
+                return;
+            }
+            // เตรียม batch สำหรับทุก job ใน queue
+            const leds = queue.map(job => ({
+                level: Number(job.level),
+                block: Number(job.block),
+                r: 0, g: 0, b: 255 // ฟ้า
+            }));
+            fetch('/api/led/clear', { method: 'POST' })
+                .then(() => fetch('/api/led/batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ leds })
+                }));
+        }
+        const ACTIVE_JOB_KEY = 'activeJob';
+        const GLOBAL_SHELF_STATE_KEY = 'globalShelfState';
+        const QUEUE_KEY = 'shelfQueue';
+
+        // เพิ่มตัวแปรสำหรับจัดการโหมด main-with-queue และ auto-return timer
+        let showMainWithQueue = false;
+        let autoReturnTimer = null;
+        let activityDetectionActive = false;
+
+        const queueSelectionView = document.getElementById('queueSelectionView');
+        const activeJobView = document.getElementById('activeJobView');
+        const queueListContainer = document.getElementById('queueListContainer');
+        const mainView = document.getElementById('mainView');
+        const shelfGrid = document.getElementById('shelfGrid');
+        const mainContainer = document.getElementById('mainContainer');        localStorage.removeItem(ACTIVE_JOB_KEY);
+
+        let SHELF_CONFIG = {};
+        let TOTAL_LEVELS = 0;
+        let MAX_BLOCKS = 0;
+
+        // ฟังก์ชันสำหรับ Force Refresh Shelf Grid Structure
+        function refreshShelfGrid() {
+            console.log('🔄 Force refreshing shelf grid with config:', SHELF_CONFIG);
+            
+            // เคลียร์ localStorage เพื่อให้สร้าง state ใหม่
+            localStorage.removeItem(GLOBAL_SHELF_STATE_KEY);
+            
+            if (shelfGrid) {
+                createShelfGridStructure();
+                initializeShelfState(); // สร้าง state ใหม่ตาม config ปัจจุบัน
+                renderShelfGrid();
+                console.log('✅ Shelf grid refreshed successfully');
+            }
+        }
+
+        // ฟังก์ชันโหลดการกำหนดค่าจาก Server
+        async function loadShelfConfig() {
+            try {
+                const response = await fetch('/api/shelf/config');
+                const data = await response.json();
+                SHELF_CONFIG = data.config;
+                TOTAL_LEVELS = data.total_levels;
+                MAX_BLOCKS = data.max_blocks;
+                console.log('📐 Shelf configuration loaded from server:', SHELF_CONFIG);
+                
+                // สร้าง grid structure ใหม่หลังจากโหลด config
+                if (shelfGrid) {
+                    refreshShelfGrid(); // ใช้ refreshShelfGrid แทน
+                }
+            } catch (error) {
+                console.warn('⚠️ Failed to load shelf config from server, using local config:', SHELF_CONFIG);
+                // ใช้ config ท้องถิ่นแทน และสร้าง grid
+                if (shelfGrid) {
+                    refreshShelfGrid();
+                }
+            }
+        }
+        // 🔼 END OF FLEXIBLE CONFIGURATION 🔼
+
+        // 🔽 ADD THIS FUNCTION 🔽
+        function showNotification(message, type = 'info', options = {}) {
+            console.log(`📢 ${type.toUpperCase()}: ${message}`);
+            
+            // ลบ notification เก่าทั้งหมดก่อน (ยกเว้น persistent notifications ถ้าไม่ใช่ persistent notification ใหม่)
+            if (!options.persistent) {
+                const existingNotifications = document.querySelectorAll('.notification:not(.persistent):not(#persistent-correct-shelf):not([data-persistent="true"])');
+                existingNotifications.forEach(notification => {
+                    notification.remove();
+                });
+            } else {
+                // ถ้าเป็น persistent notification ให้ลบ persistent เก่าก่อน
+                const existingPersistent = document.querySelectorAll('.notification.persistent, #persistent-correct-shelf');
+                existingPersistent.forEach(notification => {
+                    notification.remove();
+                });
+            }
+            
+            const notification = document.createElement('div');
+            notification.className = `notification ${type} ${options.persistent ? 'persistent' : ''}`;
+            notification.textContent = message;
+            
+            // Basic styling with larger text for persistent notifications
+            const fontSize = options.persistent ? '18px' : '14px';
+            const fontWeight = options.persistent ? '900' : 'bold';
+            const padding = options.persistent ? '20px 25px' : '15px 20px';
+            
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                padding: ${padding};
+                border-radius: 8px;
+                color: white;
+                font-weight: ${fontWeight};
+                font-size: ${fontSize};
+                z-index: 1000;
+                opacity: 0;
+                transition: all 0.3s ease-in-out;
+                transform: translateX(100%);
+                box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+                max-width: 350px;
+                word-wrap: break-word;
+            `;
+            
+            // Colors based on type
+            switch (type) {
+                case 'success': notification.style.backgroundColor = '#28a745'; break;
+                case 'error': notification.style.backgroundColor = '#dc3545'; break;
+                case 'warning': notification.style.backgroundColor = '#ffc107'; notification.style.color = '#212529'; break;
+                case 'info': notification.style.backgroundColor = '#17a2b8'; break;
+                default: notification.style.backgroundColor = '#6c757d';
+            }
+            
+            document.body.appendChild(notification);
+            
+            // Animate in
+            setTimeout(() => {
+                notification.style.opacity = '1';
+                notification.style.transform = 'translateX(0)';
+            }, 100);
+            
+            // Auto-remove only if not persistent
+            if (!options.persistent) {
+                setTimeout(() => {
+                    notification.style.opacity = '0';
+                    notification.style.transform = 'translateX(100%)';
+                    setTimeout(() => notification.remove(), 300);
+                }, 3000);
+            }
+        }
+        
+        // Function to clear persistent notifications
+        function clearPersistentNotifications() {
+            // ล้าง notification แบบเก่าและแบบใหม่
+            const persistentNotifications = document.querySelectorAll('.notification.persistent, #persistent-correct-shelf, [data-persistent="true"]');
+            persistentNotifications.forEach(notification => {
+                notification.style.opacity = '0';
+                notification.style.transform = 'translateX(100%)';
+                setTimeout(() => {
+                    if (notification.parentNode) {
+                        notification.remove();
+                    }
+                }, 300);
+            });
+            console.log('🧹 Cleared persistent notifications');
+        }
+
+        // Function to protect persistent notifications from being removed
+        function protectPersistentNotifications() {
+            const persistentNotification = document.getElementById('persistent-correct-shelf');
+            if (persistentNotification) {
+                // ป้องกันการลบโดยการ override remove method
+                const originalRemove = persistentNotification.remove;
+                persistentNotification.remove = function() {
+                    console.log('🛡️ Prevented removal of persistent notification');
+                    // ไม่ทำอะไร - ป้องกันการลบ
+                };
+                
+                // ตรวจสอบและกู้คืน style ถ้าถูกเปลี่ยน
+                setInterval(() => {
+                    if (persistentNotification.parentNode && persistentNotification.style.display === 'none') {
+                        persistentNotification.style.display = 'block';
+                        console.log('🔧 Restored persistent notification visibility');
+                    }
+                }, 1000);
+            }
+        }
+
+        /**
+         * แสดง Rich Notification พร้อมรายละเอียด LMS
+         * @param {Object} lmsData - ข้อมูลจาก LMS
+         * @param {string} type - ประเภท notification
+         */
+        function showLMSNotification(lmsData, type = 'success') {
+            console.log(`📋 LMS Notification:`, lmsData);
+            
+            // ลบ notification เก่าทั้งหมดก่อน (ยกเว้น persistent notifications)
+            const existingNotifications = document.querySelectorAll('.notification:not(.persistent):not(#persistent-correct-shelf)');
+            existingNotifications.forEach(notification => {
+                notification.remove();
+            });
+            
+            const notification = document.createElement('div');
+            notification.className = `notification lms-notification ${type}`;
+            
+            // สร้าง HTML สำหรับ rich notification
+            notification.innerHTML = `
+                <div style="display: flex; align-items: center; margin-bottom: 8px;">
+                    <span style="font-size: 16px; margin-right: 8px;">📋</span>
+                    <strong>ข้อมูลจาก LMS</strong>
+                </div>
+                <div style="font-size: 14px; line-height: 1.4;">
+                    <div>• LOT: <strong>${lmsData.lotNo}</strong></div>
+                    <div>• ชั้นวาง: <strong>${lmsData.correctShelf}</strong></div>
+                    <div>• ประเภท: <strong>${lmsData.placeFlg === "1" ? "วางของ" : "หยิบของ"}</strong></div>
+                </div>
+            `;
+            
+            // Styling
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                padding: 20px;
+                border-radius: 12px;
+                color: white;
+                z-index: 1000;
+                opacity: 0;
+                transition: all 0.3s ease-in-out;
+                transform: translateX(100%);
+                box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+                max-width: 380px;
+                min-width: 300px;
+                border-left: 4px solid rgba(255,255,255,0.3);
+            `;
+            
+            // Colors based on type
+            switch (type) {
+                case 'success': 
+                    notification.style.background = 'linear-gradient(135deg, #28a745, #20c997)'; 
+                    break;
+                case 'error': 
+                    notification.style.background = 'linear-gradient(135deg, #dc3545, #e74c3c)'; 
+                    break;
+                case 'warning': 
+                    notification.style.background = 'linear-gradient(135deg, #ffc107, #f39c12)';
+                    notification.style.color = '#212529';
+                    break;
+                case 'info': 
+                    notification.style.background = 'linear-gradient(135deg, #17a2b8, #3498db)'; 
+                    break;
+                default: 
+                    notification.style.background = 'linear-gradient(135deg, #6c757d, #95a5a6)';
+            }
+            
+            document.body.appendChild(notification);
+            
+            // Animate in
+            setTimeout(() => {
+                notification.style.opacity = '1';
+                notification.style.transform = 'translateX(0)';
+            }, 100);
+            
+            // Animate out and remove (longer duration for rich content)
+            setTimeout(() => {
+                notification.style.opacity = '0';
+                notification.style.transform = 'translateX(100%)';
+                setTimeout(() => notification.remove(), 300);
+            }, 5000); // 5 seconds for rich notification
+        }
+        // 🔼 END OF ADDED FUNCTION 🔼
+
+        function initializeShelfState() {
+            if (!localStorage.getItem(GLOBAL_SHELF_STATE_KEY)) {
+                const defaultState = [];
+                // สร้างสถานะเริ่มต้นตาม SHELF_CONFIG
+                for (let level = 1; level <= TOTAL_LEVELS; level++) {
+                    const blocksInThisLevel = SHELF_CONFIG[level];
+                    for (let block = 1; block <= blocksInThisLevel; block++) {
+                        defaultState.push([level, block, 0]); // [level, block, hasItem]
+                    }
+                }
+                localStorage.setItem(GLOBAL_SHELF_STATE_KEY, JSON.stringify(defaultState));
+            }
+        }
+
+        function cleanInvalidJobs() {
+            const queue = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
+            const cleanedQueue = queue.filter(job => job && job.lot_no && job.level && job.block);
+            if (cleanedQueue.length !== queue.length) {
+                console.warn("Removed invalid jobs from the queue.");
+                localStorage.setItem(QUEUE_KEY, JSON.stringify(cleanedQueue));
+            }
+            return cleanedQueue;
+        }
+
+        function getQueue() {
+            return cleanInvalidJobs();
+        }
+
+        function createShelfGridStructure() {
+            // เคลียร์ grid เก่าทิ้งเสมอ เพื่อให้สามารถสร้างใหม่ได้ตาม config ปัจจุบัน
+            shelfGrid.innerHTML = '';
+            
+            // กำหนดขนาด shelf-frame แบบเดียวกันทั้งสองโหมด
+            let shelfFrameWidth, shelfFrameHeight, cellHeight;
+            // ใช้ขนาดเดียวกันทั้งโหมด full-shelf และ active job
+            shelfFrameWidth = 500;
+            shelfFrameHeight = 475;
+            cellHeight = 90;
+            
+            // สร้าง Grid container หลัก
+            shelfGrid.style.display = 'flex';
+            shelfGrid.style.flexDirection = 'column';
+            shelfGrid.style.gap = '14px'; // ลด gap ระหว่างชั้นเพื่อให้พอดีกับความสูง 475px
+            shelfGrid.style.padding = '10px'; // ลด padding จาก 12px เป็น 10px
+            shelfGrid.style.background = '#f8f9fa';
+            shelfGrid.style.border = '1px solid #dee2e6';
+            shelfGrid.style.width = '100%';
+            shelfGrid.style.height = '100%';
+            
+            // คำนวณขนาดให้เหมาะสมกับ shelf-frame ตามโหมด
+            const shelfFrameBorder = 16; // border รวม (8px × 2) 
+            const shelfPadding = 20; // padding รวม (10px × 2)
+            const availableWidth = shelfFrameWidth - shelfFrameBorder - shelfPadding;
+            const gapSize = 4; // gap ระหว่าง cells
+            
+            // สร้างแต่ละ Level เป็น flexbox แยกกัน (เริ่มจากชั้นบนลงล่าง เพื่อให้ชั้น 1 อยู่ด้านล่าง)
+            for (let level = TOTAL_LEVELS; level >= 1; level--) {
+                const blocksInThisLevel = SHELF_CONFIG[level];
+                
+                // สร้าง container สำหรับแต่ละ level
+                const levelContainer = document.createElement('div');
+                levelContainer.className = 'shelf-level';
+                levelContainer.style.display = 'flex';
+                levelContainer.style.gap = `${gapSize}px`;
+                levelContainer.style.height = `${cellHeight}px`;
+                levelContainer.style.width = '100%';
+                levelContainer.style.justifyContent = 'stretch'; // กระจายพื้นที่เต็มความกว้าง
+                
+                // สร้าง cells สำหรับ level นี้
+                for (let block = 1; block <= blocksInThisLevel; block++) {
+                    const cell = document.createElement('div');
+                    cell.id = `cell-${level}-${block}`;
+                    cell.className = 'shelf-cell';
+                    cell.style.flex = '1'; // ให้ทุก cell มีขนาดเท่ากันและเต็มพื้นที่
+                    cell.style.height = '100%';
+                    cell.style.cursor = 'pointer';
+                    cell.style.borderRadius = '4px';
+                    cell.style.boxShadow = '0 1px 2px rgba(0,0,0,0.1)';
+                    
+                    // ไม่ใส่ minWidth หรือ maxWidth เพื่อให้ flex ทำงานเต็มที่
+                    
+                    // เพิ่ม click event สำหรับแสดง cell preview
+                    cell.addEventListener('click', () => {
+                        const lots = getLotsInCell(level, block);
+                        const activeJob = getActiveJob();
+                        const targetLotNo = activeJob ? activeJob.lot_no : null;
+                        renderCellPreview({ level, block, lots, targetLotNo });
+                    });
+                    
+                    levelContainer.appendChild(cell);
+                }
+                
+                shelfGrid.appendChild(levelContainer);
+            }
+            
+            console.log(`📐 Created flexible shelf grid: ${TOTAL_LEVELS} levels with configuration:`, SHELF_CONFIG);
+            console.log(`📏 Shelf frame: ${shelfFrameWidth}×${shelfFrameHeight}px | Available width: ${availableWidth}px | Cell height: ${cellHeight}px | Gap: ${gapSize}px`);
+        }
+
+        function getActiveJob() {
+            const activeJobData = localStorage.getItem(ACTIVE_JOB_KEY);
+            
+            if (!activeJobData || activeJobData === 'null') {
+                return null;
+            }
+            
+            try {
+                const job = JSON.parse(activeJobData);
+                return job;
+            } catch (error) {
+                console.error('❌ Error parsing active job:', error);
+                localStorage.removeItem(ACTIVE_JOB_KEY);
+                return null;
+            }
+        }
+
+        function setActiveJob(job) {
+            localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(job));
+        }
+
+        // 🔽 FIX goBackToQueue FUNCTION 🔽
+        function goBackToQueue() {
+            const activeJob = getActiveJob();
+            if (activeJob) {
+                console.log(`📋 Returning job to queue: ${activeJob.lot_no} (ID: ${activeJob.jobId})`);
+                
+                // ใส่ job กลับเข้า queue
+                const queue = getQueue();
+                // ตรวจสอบว่า job ไม่ได้อยู่ใน queue แล้ว
+                if (!queue.some(job => job.jobId === activeJob.jobId)) {
+                    queue.push(activeJob);
+                    localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+                    console.log(`✅ Job ${activeJob.lot_no} returned to queue. Queue size: ${queue.length}`);
+                }
+            }
+            
+            // Clear persistent notifications when leaving Active Job view
+            clearPersistentNotifications();
+            
+            localStorage.removeItem(ACTIVE_JOB_KEY);
+            renderAll();
+        }
+
+        // 🔽 ADD NEW FUNCTIONS FOR MAIN-WITH-QUEUE MODE 🔽
+        /**
+         * กลับไปหน้า Main แต่ยังคง queue ไว้ (จากหน้า Queue Selection)
+         */
+        function goBackToMain() {
+            console.log('🏠 Going back to main view with queue preserved');
+            showMainWithQueue = true;
+            stopAutoReturnTimer(); // หยุด timer เก่าถ้ามี
+            startActivityDetection(); // เริ่มตรวจจับกิจกรรม
+            startAutoReturnTimer(); // เริ่ม timer ใหม่
+            renderAll();
+        }
+
+        /**
+         * ไปหน้า Queue Selection (จากปุ่ม notification ในหน้า Main)
+         */
+        function goToQueueSelection() {
+            console.log('📋 Going to queue selection view');
+            showMainWithQueue = false;
+            stopAutoReturnTimer();
+            stopActivityDetection();
+            renderAll();
+        }
+
+        /**
+         * เริ่ม Auto Return Timer (7 วินาที)
+         */
+        function startAutoReturnTimer() {
+            if (autoReturnTimer) {
+                clearTimeout(autoReturnTimer);
+            }
+            
+            console.log('⏱️ Starting auto-return timer (7 seconds)');
+            autoReturnTimer = setTimeout(() => {
+                console.log('🔄 Auto-returning to queue selection due to inactivity');
+                const queue = getQueue();
+                if (queue.length > 0) {
+                    showMainWithQueue = false;
+                    stopActivityDetection();
+                    renderAll();
+                    showNotification('Returned to queue due to inactivity', 'info');
+                }
+            }, 7000); // 7 seconds
+        }
+
+        /**
+         * หยุด Auto Return Timer
+         */
+        function stopAutoReturnTimer() {
+            if (autoReturnTimer) {
+                clearTimeout(autoReturnTimer);
+                autoReturnTimer = null;
+                console.log('⏹️ Auto-return timer stopped');
+            }
+        }
+
+        /**
+         * Reset Auto Return Timer (เมื่อมีกิจกรรม)
+         */
+        function resetAutoReturnTimer() {
+            if (showMainWithQueue && autoReturnTimer) {
+                console.log('🔄 Resetting auto-return timer due to activity');
+                startAutoReturnTimer(); // รีสตาร์ท timer
+            }
+        }
+
+        /**
+         * เริ่มตรวจจับกิจกรรมของผู้ใช้
+         */
+        function startActivityDetection() {
+            if (activityDetectionActive) return;
+            
+            activityDetectionActive = true;
+            console.log('👁️ Starting activity detection');
+            
+            // Event listeners สำหรับตรวจจับกิจกรรม
+            const activityEvents = ['mousedown', 'mousemove', 'keydown', 'scroll', 'touchstart'];
+            
+            activityEvents.forEach(event => {
+                document.addEventListener(event, resetAutoReturnTimer, { passive: true });
+            });
+        }
+
+        /**
+         * หยุดตรวจจับกิจกรรมของผู้ใช้
+         */
+        function stopActivityDetection() {
+            if (!activityDetectionActive) return;
+            
+            activityDetectionActive = false;
+            console.log('🛑 Stopping activity detection');
+            
+            const activityEvents = ['mousedown', 'mousemove', 'keydown', 'scroll', 'touchstart'];
+            
+            activityEvents.forEach(event => {
+                document.removeEventListener(event, resetAutoReturnTimer, { passive: true });
+            });
+        }
+
+        /**
+         * อัปเดตปุ่ม Queue Notification
+         */
+        function updateQueueNotificationButton() {
+            const queueBtn = document.getElementById('queueNotificationBtn');
+            const queueCountBadge = document.getElementById('queueCountBadge');
+            
+            if (!queueBtn || !queueCountBadge) return;
+            
+            const queue = getQueue();
+            const queueCount = queue.length;
+            
+            if (showMainWithQueue && queueCount > 0) {
+                queueBtn.style.display = 'flex';
+                queueCountBadge.textContent = queueCount;
+                
+                // เพิ่ม pulse effect ถ้ามี queue มาก
+                if (queueCount >= 3) {
+                    queueBtn.classList.add('pulse');
+                } else {
+                    queueBtn.classList.remove('pulse');
+                }
+            } else {
+                queueBtn.style.display = 'none';
+                queueBtn.classList.remove('pulse');
+            }
+        }
+        // 🔼 END OF FIX 🔼
+
+        // --- Global: Track which cells have been logged for lots (persist across renderShelfGrid calls) ---
+        if (!window.__rfid_loggedCells) window.__rfid_loggedCells = new Set();
+        function renderShelfGrid() {
+            // Expect shelfState as array of {level, block, lots}
+            const shelfState = JSON.parse(localStorage.getItem(GLOBAL_SHELF_STATE_KEY) || '[]');
+            const activeJob = getActiveJob();
+
+            // เตรียมตำแหน่ง error (ถ้ามี)
+            let wrongLevel = null, wrongBlock = null;
+            if (activeJob && activeJob.error && activeJob.errorType === 'WRONG_LOCATION' && activeJob.errorMessage) {
+                const match = activeJob.errorMessage.match(/L(\d+)-B(\d+)/);
+                if (match) {
+                    wrongLevel = Number(match[1]);
+                    wrongBlock = Number(match[2]);
+                }
+            }
+
+            // Clear all cells first
+            for (let level = 1; level <= TOTAL_LEVELS; level++) {
+                const blocksInThisLevel = SHELF_CONFIG[level];
+                for (let block = 1; block <= blocksInThisLevel; block++) {
+                    const cellId = `cell-${level}-${block}`;
+                    const cell = document.getElementById(cellId);
+                    if (!cell) continue;
+                    cell.className = 'shelf-cell';
+                    cell.innerHTML = '';
+                }
+            }
+
+            // Render stacked lots in each cell (bottom-to-top: index 0 = bottom)
+            const loggedCells = window.__rfid_loggedCells;
+            if (Array.isArray(shelfState)) {
+                shelfState.forEach(cellData => {
+                    let level, block, lots;
+                    if (Array.isArray(cellData)) {
+                        level = cellData[0];
+                        block = cellData[1];
+                        lots = cellData[2];
+                    } else if (cellData && typeof cellData === 'object') {
+                        ({ level, block, lots } = cellData);
+                    } else {
+                        console.warn('⚠️ Invalid cellData in shelfState:', cellData);
+                        return;
+                    }
+                    if (!Array.isArray(lots)) lots = [];
+                    // Debug: log lots in every cell (index 0 = bottom, last = top) แบบละเอียด
+                    if (lots.length > 0) {
+                        // คำนวณเปอร์เซ็นต์การใช้งานของ cell
+                        const totalTrayInCell = lots.reduce((sum, lot) => sum + (parseInt(lot.tray_count) || 1), 0);
+                        const maxCapacity = 24; // ความจุสูงสุดของ cell
+                        const usagePercentage = Math.round((totalTrayInCell / maxCapacity) * 100);
+                        
+                        console.log(`🟫 [Grid] Lots in cell (Level: ${level}, Block: ${block}) [index 0 = bottom, last = top] - Usage: ${usagePercentage}% (${totalTrayInCell}/${maxCapacity}):`);
+                        lots.forEach((lot, idx) => {
+                            const lotTrayCount = parseInt(lot.tray_count) || 1;
+                            const lotPercentage = Math.round((lotTrayCount / maxCapacity) * 100);
+                            console.log(`   [${idx}] LotNo: ${lot.lot_no}, Tray: ${lot.tray_count}, ${lotPercentage}%`);
+                        });
+                        console.log(`   All lots:`, JSON.stringify(lots));
+                    }
+                    const cellId = `cell-${level}-${block}`;
+                    const cell = document.getElementById(cellId);
+                    if (!cell) return;
+
+            // --- Visual stacked lots (FIFO bottom-to-top: index 0 = bottom, last = top) ---
+            const safeLots = Array.isArray(lots) ? lots : [];
+            let totalTray = safeLots.reduce((sum, lot) => sum + (parseInt(lot.tray_count) || 1), 0);
+            totalTray = Math.max(totalTray, 1);
+            
+            // ปรับการคำนวณขนาดให้เหมาะสมกับ cell ที่เล็กลง
+            const maxCellHeight = 66; // ความสูงสูงสุดของ cell (70px - padding 4px)
+            
+            // Render lots in REVERSE order (last to first) เพื่อให้แสดงผลถูกต้อง
+            // เนื่องจาก flex-end จะแสดงจากล่างขึ้นบน การใส่จากท้ายไปหน้าจะทำให้ลำดับถูกต้อง
+            for (let idx = safeLots.length - 1; idx >= 0; idx--) {
+                const lot = safeLots[idx];
+                const lotDiv = document.createElement('div');
+                let isTarget = false;
+                if (activeJob && String(activeJob.level) === String(level) && String(activeJob.block) === String(block)) {
+                    isTarget = (String(lot.lot_no) === String(activeJob.lot_no));
+                }
+                lotDiv.className = 'stacked-lot' + (isTarget ? ' target-lot' : '');
+                
+                // คำนวณความสูงตาม tray_count แบบสัดส่วนที่ชัดเจน
+                const trayCount = parseInt(lot.tray_count) || 1;
+                const maxCapacity = 24;
+                const maxCellHeight = 85; // ใช้ความสูงสูงสุดที่เหมาะสมกับ cell height 90px
+                const heightRatio = trayCount / maxCapacity;
+                const trayHeight = Math.max(heightRatio * maxCellHeight, 2); // ขั้นต่ำ 2px เพื่อให้เห็น
+                lotDiv.style.height = Math.round(trayHeight) + 'px';
+                
+                // เก็บข้อมูลใน title สำหรับ tooltip เท่านั้น
+                lotDiv.title = `Lot: ${lot.lot_no}, Tray: ${trayCount}, Height: ${Math.round(trayHeight)}px`;
+                
+                // ไม่ใส่ข้อความ (แสดงเป็นกล่องสีเทาเท่านั้น)
+                
+                cell.appendChild(lotDiv);
+            }
+
+                    // --- State classes for selection/error ---
+                    let isSelected = false;
+                    if (activeJob) {
+                        const isTargetCell = (String(activeJob.level) === String(level) && String(activeJob.block) === String(block));
+                        if (isTargetCell) {
+                            cell.classList.add('selected-task');
+                            isSelected = true;
+                        }
+                        if (wrongLevel === Number(level) && wrongBlock === Number(block)) {
+                            cell.classList.add('wrong-location');
+                            cell.classList.remove('selected-task');
+                            isSelected = false;
+                        }
+                    }
+                    if (!isSelected && !(wrongLevel === Number(level) && wrongBlock === Number(block)) && Array.isArray(lots) && lots.length > 0) {
+                        cell.classList.add('has-item');
+                    }
+                });
+            } else {
+                console.error('❌ shelfState is not an array:', shelfState);
+            }
+        }
+
+        function renderActiveJob() {
+    const activeJob = getActiveJob();
+    const queue = getQueue();
+    const cellPreviewContainer = document.getElementById('cellPreviewContainer');
+    const mainContainer = document.querySelector('.main-container');
+
+    if (activeJob) {
+        // ถ้ามี active job, แสดง cell preview
+        cellPreviewContainer.style.display = 'flex';
+        mainContainer.classList.remove('full-shelf-mode');
+    } else {
+        // ถ้าไม่มี active job, ซ่อน cell preview และแสดง shelf ตรงกลาง
+        cellPreviewContainer.style.display = 'none';
+        mainContainer.classList.add('full-shelf-mode');
+    }
+
+    // สร้าง shelf grid ใหม่
+    createShelfGridStructure();
+
+    // Log clearly which lot is currently selected as active job, and lots in that cell
+    if (activeJob) {
+        const lotsInCell = getLotsInCell(activeJob.level, activeJob.block);
+        console.log(`ActiveJobLot: ${activeJob.lot_no} (Level: ${activeJob.level}, Block: ${activeJob.block})`);
+        console.log(`Lots in cell (${activeJob.level}, ${activeJob.block}):`, lotsInCell);
+
+        // แสดง Cell Preview สำหรับ active job
+        const isPlaceJob = activeJob.place_flg === '1';
+        const actualTrayCount = parseInt(activeJob.tray_count) || 1; // ใช้ค่าจริงจาก activeJob
+        renderCellPreview({
+            level: activeJob.level,
+            block: activeJob.block,
+            lots: lotsInCell,
+            targetLotNo: activeJob.lot_no,
+            isPlaceJob: isPlaceJob,
+            newLotTrayCount: isPlaceJob ? actualTrayCount : 0 // ใช้ค่าจริงแทนค่าคงที่ 12
+        });
+    } else {
+        // ถ้าไม่มี active job ให้แสดงข้อความเริ่มต้น (ตอนนี้ถูกซ่อนอยู่ แต่เผื่อกลับมาใช้)
+        const cellPreviewContent = document.getElementById('cellPreviewContent');
+        if (cellPreviewContent) {
+            cellPreviewContent.innerHTML = '<p>No active job. Select a job from the queue.</p>';
+        }
+    }
+
+    renderShelfGrid();
+}
+
+        function renderQueueSelectionView(queue) {
+            // ล้าง containers
+            queueListContainer.innerHTML = '';
+            
+            // หา containers สำหรับแต่ละฝั่ง
+            const placeContainer = document.getElementById('placeQueueContainer');
+            const pickContainer = document.getElementById('pickQueueContainer');
+            
+            if (placeContainer) placeContainer.innerHTML = '';
+            if (pickContainer) pickContainer.innerHTML = '';
+
+            // แยกงานตาม place_flg
+            const placeJobs = queue.filter(job => job.place_flg === '1'); // วาง
+            const pickJobs = queue.filter(job => job.place_flg === '0');  // หยิบ
+
+            // ฟังก์ชันสำหรับสร้าง job item
+            function createJobItem(job) {
+                const li = document.createElement('li');
+                li.className = 'queue-list-item';
+                
+                // เลือก arrow ตาม place_flg เหมือนเดิม
+                let arrowHtml = '';
+                if (job.place_flg === '0') {
+                    arrowHtml = `<span class="arrow up"></span>`;
+                } else {
+                    arrowHtml = `<span class="arrow down"></span>`;
+                }
+                
+                li.innerHTML = `
+                    <div class="info">
+                        <div class="lot">${arrowHtml}Lot: ${job.lot_no}</div>
+                        <div class="action">Action: ${job.place_flg === '1' ? 'Place' : 'Pick'} at L:${job.level}, B:${job.block}</div>
+                    </div>
+                    <button class="select-btn" onclick="selectJob('${job.jobId}')">Select</button>
+                `;
+                return li;
+            }
+
+            // เพิ่มงานวางในฝั่งซ้าย
+            if (placeContainer) {
+                placeJobs.forEach(job => {
+                    placeContainer.appendChild(createJobItem(job));
+                });
+                
+                // แสดงข้อความถ้าไม่มีงาน
+                if (placeJobs.length === 0) {
+                    const emptyMessage = document.createElement('li');
+                    emptyMessage.innerHTML = '<div style="text-align: center; color: #6c757d; padding: 20px; font-style: italic;">No job placed</div>';
+                    placeContainer.appendChild(emptyMessage);
+                }
+            }
+
+            // เพิ่มงานหยิบในฝั่งขวา
+            if (pickContainer) {
+                pickJobs.forEach(job => {
+                    pickContainer.appendChild(createJobItem(job));
+                });
+                
+                // แสดงข้อความถ้าไม่มีงาน
+                if (pickJobs.length === 0) {
+                    const emptyMessage = document.createElement('li');
+                    emptyMessage.innerHTML = '<div style="text-align: center; color: #6c757d; padding: 20px; font-style: italic;">No job picked</div>';
+                    pickContainer.appendChild(emptyMessage);
+                }
+            }
+
+            // Fallback: ใช้ container เดิมถ้าไม่มี container ใหม่
+            if (!placeContainer || !pickContainer) {
+                queue.forEach(job => {
+                    const li = document.createElement('li');
+                    li.className = 'queue-list-item';
+                    // เลือก icon ตาม action
+                    let arrowHtml = '';
+                    if (job.place_flg === '0') {
+                        arrowHtml = `<span class="arrow up"></span>`;
+                    } else {
+                        arrowHtml = `<span class="arrow down"></span>`;
+                    }
+                    li.innerHTML = `
+                        <div class="info">
+                            <div class="lot">${arrowHtml}Lot: ${job.lot_no}</div>
+                            <div class="action">Action: ${job.place_flg === '1' ? 'Place' : 'Pick'} at L:${job.level}, B:${job.block}</div>
+                        </div>
+                        <button class="select-btn" onclick="selectJob('${job.jobId}')">Select</button>
+                    `;
+                    queueListContainer.appendChild(li);
+                });
+            }
+
+            // Logic focus เดิม
+            const lotInput = document.getElementById('lot-no-input');
+            if (lotInput) {
+                lotInput.focus();
+                lotInput.onkeyup = function(event) {
+                    if (event.key === 'Enter') {
+                        handleLotSearch();
+                    }
+                };
+            }
+        }
+
+        // --- START: ลบฟังก์ชันที่ไม่จำเป็นออก ---
+        /*
+        function ensureLotInputFocus() { ... }
+        function setupLotInputBehavior(lotInput) { ... }
+        function handleLotKeyUp(event) { ... }
+        */
+        // --- END: ลบฟังก์ชันที่ไม่จำเป็นออก ---
+
+        function selectJob(jobId) {
+            const queue = getQueue();
+            const selectedJob = queue.find(job => job.jobId === jobId);
+            
+            if (selectedJob) {
+                console.log(`📋 Selecting job: ${selectedJob.lot_no} (ID: ${jobId})`);
+                
+                // รีเซ็ตโหมด main-with-queue เมื่อเลือก job
+                showMainWithQueue = false;
+                stopAutoReturnTimer();
+                stopActivityDetection();
+                
+                // เพิ่ม UUID และ timestamp สำหรับการติดตาม
+                const jobWithMeta = {
+                    ...selectedJob,
+                    selectedAt: new Date().toISOString(),
+                    uuid: crypto.randomUUID ? crypto.randomUUID() : 'uuid-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9)
+                };
+                
+                console.log(`🔍 Job metadata added - UUID: ${jobWithMeta.uuid}, Selected at: ${jobWithMeta.selectedAt}`);
+                
+                // ลบ job ที่เลือกออกจาก queue
+                const updatedQueue = queue.filter(job => job.jobId !== jobId);
+                localStorage.setItem(QUEUE_KEY, JSON.stringify(updatedQueue));
+                
+                // ตั้งเป็น active job พร้อม metadata
+                setActiveJob(jobWithMeta);
+                renderAll();
+                
+                console.log(`✅ Job ${selectedJob.lot_no} activated. Remaining queue size: ${updatedQueue.length}`);
+                console.log(`📌 Active job stored with UUID: ${jobWithMeta.uuid}`);
+            } else {
+                console.error('❌ Job not found:', jobId);
+            }
+        }
+
+        // --- START: คืนค่าฟังก์ชันให้เป็นแบบง่าย ---
+        /**
+         * ค้นหา Job จาก Lot No. แล้วทำการเลือกโดยอัตโนมัติ
+         * @param {string} lotNo - The Lot No. to search for.
+         */
+        function findAndSelectJobByLot(lotNo) {
+            if (!lotNo) return;
+
+            // ตรวจสอบรูปแบบ LOT number ก่อนค้นหา
+            if (!isValidLotNumberFormat(lotNo)) {
+                showLotFormatWarningPopup(lotNo);
+                return;
+            }
+
+            const queue = getQueue();
+            const foundJob = queue.find(job => job.lot_no === lotNo);
+
+            if (foundJob) {
+                selectJob(foundJob.jobId);
+                // รอให้ renderAll() เสร็จแล้วค่อยแสดง notification ที่จะติดยาว
+                setTimeout(() => {
+                    // ล้าง notification เก่าทั้งหมดก่อน (ยกเว้น persistent ที่มีอยู่แล้ว)
+                    const existingNotifications = document.querySelectorAll('.notification:not(#persistent-correct-shelf)');
+                    existingNotifications.forEach(n => n.remove());
+                    
+                    // ลบ persistent notification เก่าถ้ามี
+                    const oldPersistent = document.getElementById('persistent-correct-shelf');
+                    if (oldPersistent) oldPersistent.remove();
+                    
+                    // สร้าง notification แบบคงทนที่ไม่หายไป
+                    const notification = document.createElement('div');
+                    notification.className = 'notification success persistent';
+                    notification.textContent = '✅ Correct shelf';
+                    notification.id = 'persistent-correct-shelf';
+                    
+                    notification.style.cssText = `
+                        position: fixed !important;
+                        top: 20px !important;
+                        right: 20px !important;
+                        padding: 20px 25px !important;
+                        border-radius: 8px !important;
+                        color: white !important;
+                        font-weight: 900 !important;
+                        font-size: 18px !important;
+                        z-index: 99999 !important;
+                        background-color: #28a745 !important;
+                        box-shadow: 0 4px 8px rgba(0,0,0,0.1) !important;
+                        max-width: 350px !important;
+                        word-wrap: break-word !important;
+                        opacity: 1 !important;
+                        transform: translateX(0) !important;
+                        transition: all 0.3s ease-in-out !important;
+                        pointer-events: auto !important;
+                    `;
+                    
+                    document.body.appendChild(notification);
+                    console.log('✅ Persistent notification created with !important styles:', notification);
+                    
+                    // เพิ่มการป้องกันการลบ
+                    notification.setAttribute('data-persistent', 'true');
+                    
+                    // เปิดใช้งานการป้องกัน
+                    setTimeout(() => {
+                        protectPersistentNotifications();
+                    }, 100);
+                    
+                }, 800); // เพิ่ม delay เป็น 800ms
+            } else {
+                showNotification(`❌ Lot No. ${lotNo} not found in queue.`, 'error');
+                const lotInput = document.getElementById('lot-no-input');
+                if (lotInput) {
+                    lotInput.classList.add('shake');
+                    setTimeout(() => lotInput.classList.remove('shake'), 1000);
+                }
+            }
+        }
+
+        /**
+         * ตรวจสอบว่า LOT number มีรูปแบบที่ถูกต้องหรือไม่
+         * รูปแบบที่ถูกต้อง: ตัวอักษร 1 ตัว + ตัวเลข 6 หลัก + "TL." + ตัวเลข 2 หลัก
+         * ตัวอย่าง: Y531103TL.07, A123456TL.01, B999999TL.99
+         * @param {string} lotNo - หมายเลข LOT ที่ต้องตรวจสอบ
+         * @returns {boolean} - true ถ้ารูปแบบถูกต้อง
+         */
+        function isValidLotNumberFormat(lotNo) {
+            if (!lotNo || typeof lotNo !== 'string') {
+                return false;
+            }
+            
+            // รูปแบบ: ตัวอักษร 1 ตัว + ตัวเลข 6 หลัก + ตัวอักษร 2 ตัว + "." + ตัวเลข 2 หลัก
+            // ตัวอย่าง: Y531103TL.07
+            const lotPattern = /^[A-Za-z]\d{6}[A-Za-z]{2}\.\d{2}$/;
+            return lotPattern.test(lotNo.trim());
+        }
+
+        /**
+         * แสดง popup เตือนรูปแบบ LOT number
+         */
+        function showLotFormatWarningPopup(invalidLotNo = '') {
+            const overlay = document.createElement('div');
+            overlay.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(0, 0, 0, 0.6);
+                z-index: 10000;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                animation: fadeIn 0.3s ease-in-out;
+            `;
+
+            const popup = document.createElement('div');
+            popup.style.cssText = `
+                background: linear-gradient(135deg, #FF8C00, #FFA500, #FFD700);
+                border: none;
+                border-radius: 20px;
+                padding: 40px;
+                max-width: 600px;
+                width: 90%;
+                text-align: center;
+                box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                animation: slideIn 0.4s ease-in-out;
+                position: relative;
+                overflow: hidden;
+            `;
+
+            // สร้าง progress bar
+            const progressBar = document.createElement('div');
+            progressBar.style.cssText = `
+                position: absolute;
+                bottom: 0;
+                left: 0;
+                height: 4px;
+                background-color: rgba(255,255,255,0.8);
+                width: 100%;
+                transform-origin: left;
+                animation: progressBarAnimation 3s linear forwards;
+            `;
+
+            // แสดงข้อความแตกต่างกันตาม LOT ที่ป้อน
+            const displayLot = invalidLotNo || 'Y531103TL.07';
+            const titleText = invalidLotNo ? 'Invalid LOT Format' : 'LOT Not in Job Queue';
+            const messageText = invalidLotNo 
+                ? 'Please scan only Lot No. data' 
+                : `LOT ${displayLot} not found in current job queue`;
+
+            popup.innerHTML = `
+                <div style="font-size: 48px; margin-bottom: 20px;">⚠️</div>
+                <div style="font-size: 32px; font-weight: bold; color: white; margin-bottom: 15px; text-shadow: 2px 2px 4px rgba(0,0,0,0.3);">
+                    ${titleText}
+                </div>
+                <div style="font-size: 22px; color: white; margin-bottom: 25px; text-shadow: 1px 1px 2px rgba(0,0,0,0.3);">
+                    ${messageText}
+                </div>
+                <div style="font-size: 18px; color: white; margin-bottom: 30px; text-shadow: 1px 1px 2px rgba(0,0,0,0.3);">
+                    This window will close in <span id="countdown">3</span> seconds
+                </div>
+            `;
+
+            popup.appendChild(progressBar);
+
+            overlay.appendChild(popup);
+            document.body.appendChild(overlay);
+
+            // เพิ่ม CSS animations
+            const style = document.createElement('style');
+            style.textContent = `
+                @keyframes fadeIn {
+                    from { opacity: 0; }
+                    to { opacity: 1; }
+                }
+                @keyframes slideIn {
+                    from { transform: scale(0.7) translateY(-30px); opacity: 0; }
+                    to { transform: scale(1) translateY(0); opacity: 1; }
+                }
+                @keyframes progressBarAnimation {
+                    from { transform: scaleX(1); }
+                    to { transform: scaleX(0); }
+                }
+                @keyframes fadeOut {
+                    from { opacity: 1; transform: scale(1); }
+                    to { opacity: 0; transform: scale(0.8); }
+                }
+            `;
+            document.head.appendChild(style);
+
+            // Countdown และ auto-close
+            let countdown = 3;
+            const countdownElement = popup.querySelector('#countdown');
+            
+            const closePopup = () => {
+                // เพิ่ม animation ก่อนปิด
+                overlay.style.animation = 'fadeOut 0.3s ease-in-out forwards';
+                setTimeout(() => {
+                    if (document.body.contains(overlay)) {
+                        document.body.removeChild(overlay);
+                    }
+                    if (document.head.contains(style)) {
+                        document.head.removeChild(style);
+                    }
+                    
+                    // Focus กลับไปที่ input field
+                    const lotInput = document.getElementById('lot-no-input');
+                    if (lotInput) {
+                        setTimeout(() => lotInput.focus(), 100);
+                    }
+                }, 300);
+            };
+
+            // เริ่ม countdown
+            const countdownInterval = setInterval(() => {
+                countdown--;
+                if (countdownElement) {
+                    countdownElement.textContent = countdown;
+                }
+                
+                if (countdown <= 0) {
+                    clearInterval(countdownInterval);
+                    closePopup();
+                }
+            }, 1000);
+
+            // Click เพื่อปิดก่อนเวลา
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    clearInterval(countdownInterval);
+                    closePopup();
+                }
+            });
+
+            // กด Escape เพื่อปิด
+            const escapeHandler = (e) => {
+                if (e.key === 'Escape') {
+                    clearInterval(countdownInterval);
+                    document.removeEventListener('keydown', escapeHandler);
+                    closePopup();
+                }
+            };
+            document.addEventListener('keydown', escapeHandler);
+        }
+
+        /**
+         * ดึงค่าจากช่อง input แล้วส่งไปให้ฟังก์ชันค้นหา
+         */
+        function handleLotSearch() {
+            const lotInput = document.getElementById('lot-no-input');
+            if (lotInput) {
+                const lotNoToSearch = lotInput.value.trim();
+                
+                if (lotNoToSearch.length > 0) {
+                    // ตรวจสอบรูปแบบ LOT number ก่อน
+                    if (!isValidLotNumberFormat(lotNoToSearch)) {
+                        // แสดง popup เตือนรูปแบบ LOT พร้อมส่ง LOT ที่ไม่ถูกต้อง
+                        showLotFormatWarningPopup(lotNoToSearch);
+                        lotInput.value = ''; // เคลียร์ input
+                        return;
+                    }
+                    
+                    event?.stopPropagation();
+                    event?.preventDefault();
+                    
+                    findAndSelectJobByLot(lotNoToSearch);
+                    lotInput.value = '';
+                }
+            }
+        }
+        // --- END: คืนค่าฟังก์ชันให้เป็นแบบง่าย ---
+
+        // 🔽 ADD BARCODE SCANNING FUNCTIONALITY 🔽
+        /**
+         * ตั้งค่าการทำงานของช่องสแกนบาร์โค้ดในหน้า Active Job
+         */
+        function setupBarcodeScanner() {
+            const barcodeInput = document.getElementById('barcode-scanner-input');
+            if (!barcodeInput) return;
+
+            // ให้ focus ที่ช่องสแกนบาร์โค้ดเมื่อแสดงหน้า Active Job
+            barcodeInput.focus();
+
+            // จัดการเมื่อมีการสแกนบาร์โค้ด (Enter key)
+            barcodeInput.onkeyup = function(event) {
+                if (event.key === 'Enter') {
+                    handleBarcodeScanned();
+                }
+            };
+
+            // ให้ focus กลับมาที่ช่องสแกนเสมอ
+            barcodeInput.onblur = function() {
+                setTimeout(() => {
+                    if (document.getElementById('mainView').style.display !== 'none') {
+                        barcodeInput.focus();
+                    }
+                }, 100);
+            };
+        }
+
+        /**
+         * จัดการเมื่อมีการสแกนบาร์โค้ด
+         */
+        function handleBarcodeScanned() {
+            const barcodeInput = document.getElementById('barcode-scanner-input');
+            if (!barcodeInput) return;
+
+            const scannedData = barcodeInput.value.trim();
+            barcodeInput.value = '';
+
+            if (!scannedData) return;
+
+            console.log(`📱 Barcode scanned: ${scannedData}`);
+            
+            const activeJob = getActiveJob();
+            if (!activeJob) {
+                showNotification('❌ No active job to process barcode.', 'error');
+                return;
+            }
+
+            const locationMatch = parseLocationFromBarcode(scannedData);
+            
+            if (!locationMatch) {
+                showNotification(`❌ Invalid barcode format: ${scannedData}`, 'error');
+                return;
+            }
+
+            const { level, block } = locationMatch;
+            const correctLevel = Number(activeJob.level);
+            const correctBlock = Number(activeJob.block);
+
+            // ก่อนอัปเดต UI ให้ลบ class error เดิมออกจากทุก cell
+            const allCells = document.querySelectorAll('.shelf-cell');
+            allCells.forEach(cell => {
+                cell.classList.remove('wrong-location');
+                // ไม่ลบ selected-task ที่ cell เป้าหมาย
+                const cellId = cell.id;
+                if (cellId !== `cell-${correctLevel}-${correctBlock}`) {
+                    cell.classList.remove('selected-task');
+                }
+            });
+
+            if (Number(level) === correctLevel && Number(block) === correctBlock) {
+                if (activeJob.error) {
+                    const cleanJob = { ...activeJob };
+                    delete cleanJob.error;
+                    delete cleanJob.errorType;
+                    delete cleanJob.errorMessage;
+                    setActiveJob(cleanJob);
+                    renderAll();
+                }
+                showNotification(`✅ Correct location! Completing job for Lot ${activeJob.lot_no}...`, 'success');
+                completeCurrentJob();
+            } else {
+                // แสดง error UI ให้เหมือน LED: ช่องถูกต้อง (selected-task, ฟ้า), ช่องที่ผิด (wrong-location, แดง)
+                //showNotification(`❌ Wrong location! Expected: L${correctLevel}-B${correctBlock}, Got: L${level}-B${block}`, 'error');
+
+                // อัปเดต UI: ช่องถูกต้อง (selected-task)
+                const correctCell = document.getElementById(`cell-${correctLevel}-${correctBlock}`);
+                if (correctCell) {
+                    correctCell.classList.add('selected-task');
+                }
+                // ช่องผิด (wrong-location)
+                const wrongCell = document.getElementById(`cell-${level}-${block}`);
+                if (wrongCell) {
+                    wrongCell.classList.add('wrong-location');
+                    wrongCell.classList.remove('selected-task');
+                }
+                // อัปเดต state error ใน activeJob
+                reportJobError('WRONG_LOCATION', `Scanned wrong location: L${level}-B${block}, Expected: L${correctLevel}-B${correctBlock}`);
+            }
+        }
+
+        /**
+         * แยกข้อมูลตำแหน่งจากบาร์โค้ด
+         * รูปแบบที่รองรับ: L1-B2, 1-2, L1B2, 1,2 เป็นต้น
+         */
+        function parseLocationFromBarcode(barcode) {
+            // ลบช่องว่างและแปลงเป็นตัวพิมพ์ใหญ่
+            const cleaned = barcode.replace(/\s+/g, '').toUpperCase();
+            
+            // รูปแบบต่างๆ ที่รองรับ
+            const patterns = [
+                /^L(\d+)-?B(\d+)$/,  // L1-B2 หรือ L1B2
+                /^(\d+)-(\d+)$/,     // 1-2
+                /^(\d+),(\d+)$/,     // 1,2
+                /^(\d+)_(\d+)$/,     // 1_2
+                /^L(\d+)B(\d+)$/     // L1B2
+            ];
+
+            for (const pattern of patterns) {
+                const match = cleaned.match(pattern);
+                if (match) {
+                    const level = parseInt(match[1]);
+                    const block = parseInt(match[2]);
+                    
+                    // ตรวจสอบว่า Level และ Block ที่สแกนมาอยู่ในช่วงที่ถูกต้องหรือไม่
+                    if (level >= 1 && level <= TOTAL_LEVELS && 
+                        block >= 1 && block <= SHELF_CONFIG[level]) {
+                        return { level, block };
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        /**
+         * ส่งคำสั่ง Complete Job ไปยัง Server
+         */
+        function completeCurrentJob() {
+            let activeJob = getActiveJob();
+            if (!activeJob) {
+                showNotification('❌ No active job to complete.', 'error');
+                return;
+            }
+
+            // ตรวจสอบและเคลียร์ error state ถ้ามี
+            if (activeJob.error) {
+                activeJob = { ...activeJob };
+                delete activeJob.error;
+                delete activeJob.errorType;  
+                delete activeJob.errorMessage;
+                setActiveJob(activeJob);
+            }
+
+            console.log('🚀 Completing job:', activeJob.jobId, 'Lot:', activeJob.lot_no);
+            console.log(`📝 Job metadata:`, {
+                uuid: activeJob.uuid || 'N/A',
+                selectedAt: activeJob.selectedAt || 'N/A',
+                level: activeJob.level,
+                block: activeJob.block
+            });
+
+            // Clear loggedCells so next render logs new state
+            if (window.__rfid_loggedCells) window.__rfid_loggedCells.clear();
+
+            // ส่งข้อมูลผ่าน WebSocket
+            if (websocketConnection && websocketConnection.readyState === WebSocket.OPEN) {
+                const message = {
+                    type: 'complete_job',
+                    payload: {
+                        jobId: activeJob.jobId,
+                        lot_no: activeJob.lot_no,
+                        level: activeJob.level,
+                        block: activeJob.block,
+                        uuid: activeJob.uuid || null,
+                        completedAt: new Date().toISOString()
+                    }
+                };
+                websocketConnection.send(JSON.stringify(message));
+                console.log('📤 Complete job message sent via WebSocket:', message.payload);
+            } else {
+                console.warn('⚠️ WebSocket not available, using HTTP fallback');
+                
+                fetch('/command/complete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        job_id: activeJob.jobId,
+                        lot_no: activeJob.lot_no
+                    })
+                })
+                .then(response => {
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('✅ Job completed via HTTP API:', data);
+                    showNotification(`✅ Job completed successfully!`, 'success');
+                    clearPersistentNotifications(); // Clear persistent notifications on job completion
+                    localStorage.removeItem(ACTIVE_JOB_KEY);
+                    renderAll();
+
+                    // ดับไฟ LED หลังงานเสร็จ
+                    fetch('/api/led/clear', { method: 'POST' });
+                })
+                .catch(error => {
+                    console.error('❌ Error completing job:', error);
+                    showNotification('❌ Error completing job. Please try again.', 'error');
+                });
+            }
+        }
+
+        /**
+         * รายงานข้อผิดพลาดของงาน
+         */
+        function reportJobError(errorType, errorMessage) {
+            const activeJob = getActiveJob();
+            if (!activeJob) return;
+
+            console.log(`🚨 Reporting job error: ${errorType}`);
+            
+            const errorJob = { ...activeJob, error: true, errorType, errorMessage };
+            setActiveJob(errorJob);
+            renderAll();
+
+            if (websocketConnection && websocketConnection.readyState === WebSocket.OPEN) {
+                const message = {
+                    type: 'job_error',
+                    payload: {
+                        jobId: activeJob.jobId,
+                        errorType,
+                        errorMessage,
+                        lot_no: activeJob.lot_no
+                    }
+                };
+                websocketConnection.send(JSON.stringify(message));
+            }
+        }
+        // 🔼 END OF BARCODE SCANNING FUNCTIONALITY 🔼
+
+        function renderAll() {
+            const queue = getQueue();
+            const activeJob = getActiveJob();
+
+            // อัปเดตปุ่ม Queue Notification
+            updateQueueNotificationButton();
+
+            // Logic สำหรับแสดงหน้าที่เหมาะสม
+            if (showMainWithQueue) {
+                // โหมด Main with Queue - แสดงหน้า Main แต่มี notification button
+                console.log('🏠 Rendering Main view with queue notification');
+                queueSelectionView.style.display = 'none';
+                mainView.style.display = 'flex';
+                renderActiveJob(); // แสดง shelf แบบ full mode
+                renderShelfGrid();
+            } else if (queue.length > 0 && !activeJob) {
+                // แสดงหน้า Queue Selection
+                console.log('📋 Rendering Queue Selection view');
+                mainView.style.display = 'none';
+                queueSelectionView.style.display = 'block';
+                renderQueueSelectionView(queue);
+                controlLEDByQueue();
+            } else if (activeJob) {
+                // แสดงหน้า Active Job
+                console.log('🎯 Rendering Active Job view');
+                showMainWithQueue = false; // รีเซ็ต flag
+                stopAutoReturnTimer(); // หยุด timer
+                stopActivityDetection(); // หยุดตรวจจับกิจกรรม
+                controlLEDByActiveJob();
+                queueSelectionView.style.display = 'none';
+                mainView.style.display = 'flex';
+                renderActiveJob();
+                renderShelfGrid();
+                setupBarcodeScanner();
+            } else {
+                // ไม่มี queue และไม่มี active job - แสดงหน้า Main แบบปกติ
+                console.log('🏠 Rendering Main view (no queue, no active job)');
+                showMainWithQueue = false;
+                stopAutoReturnTimer();
+                stopActivityDetection();
+                queueSelectionView.style.display = 'none';
+                mainView.style.display = 'flex';
+                renderActiveJob();
+                renderShelfGrid();
+            }
+        }
+
+        // --- Initial Load ---
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadShelfConfig();
+            initializeShelfState();
+            setupWebSocket();
+            renderAll();
+        });
+        
+        // ลบ Event Listener ของ 'storage' เก่าออก เพราะเราจะใช้ WebSocket แทน
+        window.removeEventListener('storage', renderAll);
+
+        // 🔽 EXPOSE FUNCTIONS TO GLOBAL SCOPE FOR HTML ONCLICK 🔽
+        window.goBackToMain = goBackToMain;
+        window.goToQueueSelection = goToQueueSelection;
+        window.selectJob = selectJob;
+        window.handleLotSearch = handleLotSearch;
+        window.findAndSelectJobByLot = findAndSelectJobByLot;
+        // 🔼 END OF EXPOSED FUNCTIONS 🔼
+        
+        // *** START: WebSocket Integration ***
+        let websocketConnection = null; // เก็บ WebSocket connection
+
+        function setupWebSocket() {
+            const ws = new WebSocket(`ws://${window.location.host}/ws`);
+            
+            websocketConnection = ws;
+
+            ws.onopen = function(event) {
+                console.log("✅ WebSocket connected");
+            };
+
+            ws.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+
+                    switch (data.type) {
+                        case "initial_state":
+                            localStorage.setItem(QUEUE_KEY, JSON.stringify(data.payload.jobs));
+                            localStorage.setItem(GLOBAL_SHELF_STATE_KEY, JSON.stringify(data.payload.shelf_state));
+                            renderAll();
+                            break;
+                        case "new_job":
+                            const queue = getQueue();
+                            if (!queue.some(job => job.jobId === data.payload.jobId)) {
+                                queue.push(data.payload);
+                                localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+                                
+                                // ถ้าอยู่ในโหมด main-with-queue ให้กลับไปหน้า queue เมื่อมี job ใหม่
+                                if (showMainWithQueue) {
+                                    console.log('📋 New job arrived, returning to queue selection');
+                                    showMainWithQueue = false;
+                                    stopAutoReturnTimer();
+                                    stopActivityDetection();
+                                }
+                                
+                                renderAll();
+                                showNotification(`New Lot: ${data.payload.lot_no}`);
+                            }
+                            break;
+                        case "job_completed":
+                            console.log('📦 Received job_completed message:', data.payload);
+                            
+                            // ตรวจสอบว่า job ที่เสร็จสิ้นตรงกับ active job ปัจจุบันหรือไม่
+                            const currentActiveJob = getActiveJob();
+                            if (currentActiveJob && currentActiveJob.jobId !== data.payload.completedJobId) {
+                                console.warn(`⚠️ Job ID mismatch! Current active: ${currentActiveJob.jobId}, Completed: ${data.payload.completedJobId}`);
+                                console.warn(`⚠️ Current active lot: ${currentActiveJob.lot_no}, Completed lot: ${data.payload.lot_no}`);
+                                console.warn(`🔍 UUID check - Active UUID: ${currentActiveJob.uuid || 'N/A'}, Completed UUID: ${data.payload.uuid || 'N/A'}`);
+                                
+                                // ตรวจสอบ UUID ถ้ามี
+                                if (currentActiveJob.uuid && data.payload.uuid && currentActiveJob.uuid !== data.payload.uuid) {
+                                    console.error(`❌ UUID mismatch detected! This is a different job completion.`);
+                                }
+                                
+                                // ถ้าไม่ตรงกัน อาจเป็นการ complete job อื่นที่ไม่ใช่ active job
+                                // แค่อัปเดต queue และ shelf state โดยไม่ลบ active job
+                                let currentQueue = getQueue();
+                                currentQueue = currentQueue.filter(j => j.jobId !== data.payload.completedJobId);
+                                localStorage.setItem(QUEUE_KEY, JSON.stringify(currentQueue));
+                                localStorage.setItem(GLOBAL_SHELF_STATE_KEY, JSON.stringify(data.payload.shelf_state));
+                                renderAll();
+                                showNotification(`⚠️ Job ${data.payload.lot_no} completed by another process!`, 'warning');
+                                return; // ไม่ลบ active job
+                            }
+                            
+                            let currentQueue = getQueue();
+                            console.log(`📋 Queue before removal (size: ${currentQueue.length}):`, currentQueue.map(j => `${j.lot_no}(${j.jobId})`));
+                            
+                            currentQueue = currentQueue.filter(j => j.jobId !== data.payload.completedJobId);
+                            console.log(`📋 Queue after removal (size: ${currentQueue.length}):`, currentQueue.map(j => `${j.lot_no}(${j.jobId})`));
+                            
+                            localStorage.setItem(QUEUE_KEY, JSON.stringify(currentQueue));
+                            
+                            // ตรวจสอบ shelf state ก่อนและหลังการอัปเดต
+                            const oldShelfState = JSON.parse(localStorage.getItem(GLOBAL_SHELF_STATE_KEY) || '[]');
+                            console.log('📦 Shelf state before update:', oldShelfState);
+                            console.log('📦 New shelf state from server:', data.payload.shelf_state);
+                            
+            localStorage.setItem(GLOBAL_SHELF_STATE_KEY, JSON.stringify(data.payload.shelf_state));
+            clearPersistentNotifications(); // Clear persistent notifications on job completion
+            localStorage.removeItem(ACTIVE_JOB_KEY);
+            renderAll();
+            showNotification(`✅ Job completed for Lot ${data.payload.lot_no || 'Unknown'}!`, 'success');                            fetch('/api/led/clear', { method: 'POST' });
+                            break;
+                        case "job_warning":
+                            console.log('⚠️ Received job warning:', data.payload);
+                            showNotification(`⚠️ ${data.payload.message}`, 'warning');
+                            
+                            // ถ้า warning เป็น JOB_ALREADY_COMPLETED ให้ลบ active job และ render ใหม่
+                            if (data.payload.warning === 'JOB_ALREADY_COMPLETED') {
+                                localStorage.removeItem(ACTIVE_JOB_KEY);
+                                renderAll();
+                            }
+                            break;
+                        case "job_error":
+                            localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(data.payload)); // ใช้ Key ที่ถูกต้อง
+                            renderAll();
+                            showNotification(`❌ Lot ${data.payload.lot_no} Must place at L${data.payload.level}-B${data.payload.block}`, 'error');
+                            break;
+                        case "system_reset":
+                            localStorage.clear();
+                            initializeShelfState();
+                            renderAll();
+                            showNotification('System has been reset.', 'warning');
+                            break;
+                    }
+                } catch (e) {
+                    console.error("Error parsing message from server:", e);
+                }
+            };
+
+            ws.onclose = function(event) {
+                console.log("❌ WebSocket disconnected. Reconnecting in 3 seconds...");
+                setTimeout(setupWebSocket, 3000);
+            };
+
+            ws.onerror = function(error) {
+                console.error("💥 WebSocket error:", error);
+            };
+        }
+
+        // ฟังก์ชันสำหรับอัปเดตขนาด cell 
+        function updateCellSizes() {
+            // ใช้ขนาดเดียวกันทั้งสองโหมด
+            let cellHeight = 90;
+            
+            // อัปเดต level containers
+            const levelContainers = document.querySelectorAll('.shelf-level');
+            levelContainers.forEach(container => {
+                container.style.height = `${cellHeight}px`;
+            });
+            
+            // อัปเดตขนาดของ cell ทั้งหมด แต่เก็บ state classes ไว้
+            const allCells = document.querySelectorAll('.shelf-cell');
+            allCells.forEach(cell => {
+                // เก็บ state classes ที่สำคัญไว้
+                const hasItem = cell.classList.contains('has-item');
+                const isSelectedTask = cell.classList.contains('selected-task');
+                const isWrongLocation = cell.classList.contains('wrong-location');
+                const hasHighlightError = cell.classList.contains('highlight-error');
+                
+                // cells ใช้ flex: 1 แล้ว ไม่ต้องกำหนดขนาดเฉพาะ
+                
+                // เพิ่ม state classes กลับคืน
+                if (hasItem) cell.classList.add('has-item');
+                if (isSelectedTask) cell.classList.add('selected-task');
+                if (isWrongLocation) cell.classList.add('wrong-location');
+                if (hasHighlightError) cell.classList.add('highlight-error');
+            });
+        }
+
+        // เพิ่ม event listeners สำหรับ window resize และ full-shelf mode toggle
+        window.addEventListener('resize', updateCellSizes);
+        
+        // ฟังการเปลี่ยนแปลง full-shelf mode
+        const observer = new MutationObserver(function(mutations) {
+            mutations.forEach(function(mutation) {
+                if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
+                    updateCellSizes();
+                }
+            });
+        });
+        
+        // เฝ้าดู main-container สำหรับการเปลี่ยนแปลง class
+        const mainContainerElement = document.querySelector('.main-container');
+        if (mainContainerElement) {
+            observer.observe(mainContainerElement, { attributes: true, attributeFilter: ['class'] });
+        }
+
+        /**
+         * ฟังก์ชันควบคุม LED ตามสถานะ active job (logic อยู่ฝั่ง frontend)
+         * สามารถปรับ mapping สี/สถานะได้ที่นี่
+         */
+        function controlLEDByActiveJob(wrongLocation = null) {
+            const activeJob = getActiveJob();
+            if (!activeJob) return;
+
+            const level = Number(activeJob.level);
+            const block = Number(activeJob.block);
+            // ช่องเป้าหมาย: ฟ้า (place) หรือ ฟ้า (pick)
+            let color = { r: 0, g: 0, b: 255 }; // default: ฟ้า (place)
+            if (activeJob.place_flg === '0') {
+                color = { r: 0, g: 0, b: 22 }; // ฟ้า (pick)
+            }
+
+            // ดับไฟทั้งหมดก่อน (เพื่อป้องกัน ghost LED)
+            fetch('/api/led/clear', { method: 'POST' });
+
+            // ถ้าอยู่ใน error และ errorType เป็น WRONG_LOCATION ให้โชว์ไฟแดงที่ตำแหน่งผิด
+            if (activeJob.error && activeJob.errorType === 'WRONG_LOCATION' && activeJob.errorMessage) {
+                // parse wrong location from errorMessage
+                const match = activeJob.errorMessage.match(/L(\d+)-B(\d+)/);
+                if (match) {
+                    const wrongLevel = Number(match[1]);
+                    const wrongBlock = Number(match[2]);
+                    // ช่องเป้าหมาย (ฟ้า/เหลือง)
+                    fetch('/api/led', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ level, block, ...color })
+                    });
+                    // ช่องผิด (แดง)
+                    fetch('/api/led', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ level: wrongLevel, block: wrongBlock, r: 255, g: 0, b: 0 })
+                    });
+                    return;
+                }
+            }
+            // ถ้าไม่ error หรือ error อื่น ให้โชว์เฉพาะช่องเป้าหมาย
+            fetch('/api/led', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ level, block, ...color })
+            });
+        }
+
+          // 🔽 LMS Integration Functions 🔽
+        
+        /**
+         * แสดง Location Popup สำหรับ LMS ตามรูปแบบที่กำหนด
+         * @param {string} lotNo - หมายเลข Lot
+         * @param {string} location - ตำแหน่งที่ต้องไป
+         * @param {string} type - ประเภท popup (warning, error, success, info)
+         * @param {number} duration - ระยะเวลาแสดง popup (milliseconds, 0 = ไม่ปิดอัตโนมัติ)
+         */
+        function showLMSLocationPopup(lotNo, location, type = 'warning', duration = 0) {
+            // ลบ popup เก่าถ้ามี
+            const existingPopup = document.getElementById('lmsLocationPopup');
+            if (existingPopup) {
+                existingPopup.remove();
+            }
+
+            // เพิ่ม CSS animations ถ้ายังไม่มี
+            if (!document.getElementById('lmsLocationPopupStyles')) {
+                const style = document.createElement('style');
+                style.id = 'lmsLocationPopupStyles';
+                style.textContent = `
+                    @keyframes lmsLocationFadeIn {
+                        from { opacity: 0; }
+                        to { opacity: 1; }
+                    }
+                    @keyframes lmsLocationSlideInDown {
+                        from {
+                            transform: translateY(-50px);
+                            opacity: 0;
+                        }
+                        to {
+                            transform: translateY(0);
+                            opacity: 1;
+                        }
+                    }
+                    @keyframes lmsLocationPulse {
+                        0% {
+                            transform: scale(1);
+                        }
+                        50% {
+                            transform: scale(1.05);
+                        }
+                        100% {
+                            transform: scale(1);
+                        }
+                    }
+                `;
+                document.head.appendChild(style);
+            }
+
+            // สร้าง overlay
+            const overlay = document.createElement('div');
+            overlay.id = 'lmsLocationPopup';
+            overlay.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(0, 0, 0, 0.8);
+                z-index: 10000;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                animation: lmsLocationFadeIn 0.3s ease-in-out;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+            `;
+
+            // กำหนดสีตาม type
+            let backgroundColor, borderColor;
+            switch (type) {
+                case 'error':
+                    backgroundColor = '#ff4757';
+                    borderColor = '#ff3838';
+                    break;
+                case 'success':
+                    backgroundColor = '#2ed573';
+                    borderColor = '#1dd1a1';
+                    break;
+                case 'info':
+                    backgroundColor = '#3742fa';
+                    borderColor = '#2f3542';
+                    break;
+                default: // warning/default (orange like in image)
+                    backgroundColor = '#ff6b35';
+                    borderColor = '#e55a2b';
+            }
+
+            // สร้าง popup content
+            const popup = document.createElement('div');
+            popup.style.cssText = `
+                background: ${backgroundColor};
+                color: white;
+                padding: 40px 50px;
+                border-radius: 15px;
+                box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+                max-width: 500px;
+                width: 90%;
+                text-align: center;
+                position: relative;
+                animation: lmsLocationSlideInDown 0.5s ease-out;
+                border: 3px solid ${borderColor};
+                font-weight: bold;
+            `;
+
+            // สร้าง Lot No.
+            const lotElement = document.createElement('div');
+            lotElement.textContent = `Lot No. ${lotNo}`;
+            lotElement.style.cssText = `
+                margin: 0 0 30px 0;
+                font-size: 28px;
+                font-weight: bold;
+                text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+                line-height: 1.2;
+            `;
+
+            // สร้าง "GO TO:" label
+            const goToLabel = document.createElement('div');
+            goToLabel.textContent = 'GO TO:';
+            goToLabel.style.cssText = `
+                margin: 0 0 15px 0;
+                font-size: 20px;
+                font-weight: bold;
+                opacity: 0.9;
+            `;
+
+            // สร้าง location
+            const locationElement = document.createElement('div');
+            locationElement.textContent = location;
+            locationElement.style.cssText = `
+                margin: 0 0 35px 0;
+                font-size: 32px;
+                font-weight: bold;
+                text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+                line-height: 1.2;
+                letter-spacing: 1px;
+            `;
+
+            // สร้างปุ่ม OK
+            const okButton = document.createElement('button');
+            okButton.textContent = 'OK';
+            okButton.style.cssText = `
+                background: rgba(255, 255, 255, 0.9);
+                color: ${backgroundColor};
+                border: none;
+                padding: 12px 40px;
+                border-radius: 8px;
+                font-size: 18px;
+                font-weight: bold;
+                cursor: pointer;
+                transition: all 0.3s ease;
+                box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+                min-width: 120px;
+            `;
+
+            // เพิ่ม hover effect สำหรับปุ่ม OK
+            okButton.addEventListener('mouseenter', () => {
+                okButton.style.background = 'white';
+                okButton.style.transform = 'translateY(-2px)';
+                okButton.style.boxShadow = '0 6px 20px rgba(0, 0, 0, 0.3)';
+            });
+
+            okButton.addEventListener('mouseleave', () => {
+                okButton.style.background = 'rgba(255, 255, 255, 0.9)';
+                okButton.style.transform = 'translateY(0)';
+                okButton.style.boxShadow = '0 4px 15px rgba(0, 0, 0, 0.2)';
+            });
+
+            // Click event สำหรับปุ่ม OK
+            okButton.addEventListener('click', () => {
+                overlay.remove();
+            });
+
+            // ประกอบ popup
+            popup.appendChild(lotElement);
+            popup.appendChild(goToLabel);
+            popup.appendChild(locationElement);
+            popup.appendChild(okButton);
+
+            overlay.appendChild(popup);
+            document.body.appendChild(overlay);
+
+            // Auto hide after duration (ถ้ากำหนด duration > 0)
+            if (duration > 0) {
+                setTimeout(() => {
+                    if (overlay && overlay.parentNode) {
+                        overlay.style.animation = 'lmsLocationFadeIn 0.3s ease-in-out reverse';
+                        setTimeout(() => {
+                            overlay.remove();
+                        }, 300);
+                    }
+                }, duration);
+            }
+
+            // Click overlay to close
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    overlay.remove();
+                }
+            });
+
+            // ESC to close
+            const escHandler = (e) => {
+                if (e.key === 'Escape') {
+                    overlay.remove();
+                    document.removeEventListener('keydown', escHandler);
+                }
+            };
+            document.addEventListener('keydown', escHandler);
+
+            // Focus ปุ่ม OK เพื่อให้สามารถกด Enter ได้
+            setTimeout(() => {
+                okButton.focus();
+            }, 100);
+
+            // Enter to close
+            okButton.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    overlay.remove();
+                }
+            });
+        }
+
+        /**
+         * แสดง Alert Popup สำหรับ LMS response (แบบเก่า)
+         */
+        function showLMSAlertPopup(title, message, details = null, type = 'warning', duration = 0) {
+            // ลบ popup เก่าถ้ามี
+            const existingPopup = document.getElementById('lmsAlertPopup');
+            if (existingPopup) {
+                existingPopup.remove();
+            }
+
+            // เพิ่ม CSS animations ถ้ายังไม่มี
+            if (!document.getElementById('lmsPopupStyles')) {
+                const style = document.createElement('style');
+                style.id = 'lmsPopupStyles';
+                style.textContent = `
+                    @keyframes fadeIn {
+                        from { opacity: 0; }
+                        to { opacity: 1; }
+                    }
+                    @keyframes slideInDown {
+                        from {
+                            transform: translateY(-50px);
+                            opacity: 0;
+                        }
+                        to {
+                            transform: translateY(0);
+                            opacity: 1;
+                        }
+                    }
+                    @keyframes bounce {
+                        0%, 20%, 50%, 80%, 100% {
+                            transform: translateY(0);
+                        }
+                        40% {
+                            transform: translateY(-10px);
+                        }
+                        60% {
+                            transform: translateY(-5px);
+                        }
+                    }
+                    @keyframes pulse {
+                        0% {
+                            box-shadow: 0 0 0 0 rgba(255, 87, 87, 0.7);
+                        }
+                        70% {
+                            box-shadow: 0 0 0 20px rgba(255, 87, 87, 0);
+                        }
+                        100% {
+                            box-shadow: 0 0 0 0 rgba(255, 87, 87, 0);
+                        }
+                    }
+                `;
+                document.head.appendChild(style);
+            }
+
+            // สร้าง overlay
+            const overlay = document.createElement('div');
+            overlay.id = 'lmsAlertPopup';
+            overlay.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(0, 0, 0, 0.8);
+                z-index: 10000;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                animation: fadeIn 0.3s ease-in-out;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            `;
+
+            // กำหนดสีตาม type
+            let backgroundColor, borderColor, iconColor, icon;
+            switch (type) {
+                case 'error':
+                    backgroundColor = 'linear-gradient(135deg, #ff4757, #ff3838)';
+                    borderColor = '#ff4757';
+                    iconColor = '#fff';
+                    icon = '⚠️';
+                    break;
+                case 'success':
+                    backgroundColor = 'linear-gradient(135deg, #ffa502, #ff6348)';
+                    borderColor = '#ffa502';
+                    //backgroundColor = 'linear-gradient(135deg, #2ed573, #1dd1a1)';
+                    //borderColor = '#2ed573';
+                    iconColor = '#fff';
+                    icon = '✅';
+                    break;
+                case 'info':
+                    backgroundColor = 'linear-gradient(135deg, #3742fa, #2f3542)';
+                    borderColor = '#3742fa';
+                    iconColor = '#fff';
+                    icon = '🔍';
+                    break;
+                default: // warning
+                    backgroundColor = 'linear-gradient(135deg, #ffa502, #ff6348)';
+                    borderColor = '#ffa502';
+                    iconColor = '#fff';
+                    icon = '⚠️';
+            }
+
+            // สร้าง popup content
+            const popup = document.createElement('div');
+            popup.style.cssText = `
+                background: ${backgroundColor};
+                color: white;
+                padding: 40px;
+                border-radius: 20px;
+                box-shadow: 0 25px 80px rgba(0, 0, 0, 0.3);
+                max-width: 600px;
+                width: 90%;
+                text-align: center;
+                position: relative;
+                animation: slideInDown 0.5s ease-out;
+                border: 4px solid ${borderColor};
+                ${type === 'error' ? 'animation: slideInDown 0.5s ease-out, pulse 2s infinite;' : ''}
+            `;
+
+            // สร้าง icon
+            const iconElement = document.createElement('div');
+            iconElement.innerHTML = icon;
+            iconElement.style.cssText = `
+                font-size: 80px;
+                margin-bottom: 20px;
+                animation: bounce 1s ease-in-out infinite;
+                filter: drop-shadow(2px 2px 4px rgba(0,0,0,0.3));
+            `;
+
+            // สร้าง title
+            const titleElement = document.createElement('h2');
+            titleElement.textContent = title;
+            titleElement.style.cssText = `
+                margin: 0 0 20px 0;
+                font-size: 32px;
+                font-weight: bold;
+                text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+                line-height: 1.2;
+            `;
+
+            // สร้าง message
+            const messageElement = document.createElement('p');
+            messageElement.textContent = message;
+            messageElement.style.cssText = `
+                margin: 0 0 25px 0;
+                font-size: 20px;
+                line-height: 1.5;
+                font-weight: 500;
+            `;
+
+            // สร้าง details ถ้ามี
+            let detailsElement = null;
+            if (details) {
+                detailsElement = document.createElement('div');
+                detailsElement.style.cssText = `
+                    background-color: rgba(255, 255, 255, 0.2);
+                    padding: 20px;
+                    border-radius: 12px;
+                    margin: 20px 0;
+                    font-size: 16px;
+                    line-height: 1.6;
+                    border: 1px solid rgba(255, 255, 255, 0.3);
+                `;
+                detailsElement.innerHTML = details;
+            }
+
+            // สร้าง countdown และ progress bar เฉพาะเมื่อ duration > 0
+            let countdownElement = null;
+            let progressBar = null;
+            let progressFill = null;
+            let countdownInterval = null;
+
+            if (duration > 0) {
+                // สร้าง countdown
+                countdownElement = document.createElement('div');
+                countdownElement.style.cssText = `
+                    margin-top: 25px;
+                    font-size: 14px;
+                    opacity: 0.8;
+                    font-weight: 500;
+                `;
+                
+                let timeLeft = Math.floor(duration / 1000);
+                countdownElement.textContent = `This window will close in ${timeLeft} second`;
+
+                // สร้าง progress bar
+                progressBar = document.createElement('div');
+                progressBar.style.cssText = `
+                    width: 100%;
+                    height: 4px;
+                    background-color: rgba(255, 255, 255, 0.3);
+                    border-radius: 2px;
+                    margin-top: 15px;
+                    overflow: hidden;
+                `;
+                
+                progressFill = document.createElement('div');
+                progressFill.style.cssText = `
+                    height: 100%;
+                    background-color: rgba(255, 255, 255, 0.8);
+                    width: 100%;
+                    border-radius: 2px;
+                    transition: width ${duration}ms linear;
+                `;
+                progressBar.appendChild(progressFill);
+            } else {
+                // เพิ่มข้อความสำหรับ manual close
+                const manualCloseNote = document.createElement('div');
+                manualCloseNote.style.cssText = `
+                    margin-top: 25px;
+                    font-size: 14px;
+                    opacity: 0.8;
+                    font-weight: 500;
+                `;
+                manualCloseNote.textContent = 'กด ESC หรือคลิกด้านนอกเพื่อปิด';
+                countdownElement = manualCloseNote;
+            }
+
+            // ประกอบ popup
+            popup.appendChild(iconElement);
+            popup.appendChild(titleElement);
+            popup.appendChild(messageElement);
+            if (detailsElement) popup.appendChild(detailsElement);
+            if (countdownElement) popup.appendChild(countdownElement);
+            if (progressBar) popup.appendChild(progressBar);
+
+            overlay.appendChild(popup);
+            document.body.appendChild(overlay);
+
+            // เริ่ม countdown และ progress bar เฉพาะเมื่อ duration > 0
+            if (duration > 0 && progressFill) {
+                setTimeout(() => {
+                    progressFill.style.width = '0%';
+                }, 100);
+
+                countdownInterval = setInterval(() => {
+                    let timeLeft = Math.floor((duration - (Date.now() - startTime)) / 1000);
+                    if (timeLeft < 0) timeLeft = 0;
+                    countdownElement.textContent = `This window will close in ${timeLeft} seconds`;
+
+                    if (timeLeft <= 0) {
+                        clearInterval(countdownInterval);
+                    }
+                }, 1000);
+
+                const startTime = Date.now();
+            }
+
+            // Auto hide after duration (เฉพาะเมื่อ duration > 0)
+            if (duration > 0) {
+                setTimeout(() => {
+                    if (overlay && overlay.parentNode) {
+                        overlay.style.animation = 'fadeIn 0.3s ease-in-out reverse';
+                        setTimeout(() => {
+                            overlay.remove();
+                        }, 300);
+                    }
+                    if (countdownInterval) clearInterval(countdownInterval);
+                }, duration);
+            }
+
+            // Click to close
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    if (countdownInterval) clearInterval(countdownInterval);
+                    overlay.remove();
+                }
+            });
+
+            // ESC to close
+            const escHandler = (e) => {
+                if (e.key === 'Escape') {
+                    if (countdownInterval) clearInterval(countdownInterval);
+                    overlay.remove();
+                    document.removeEventListener('keydown', escHandler);
+                }
+            };
+            document.addEventListener('keydown', escHandler);
+        }
+
+        /**
+         * จัดการเมื่อ scan LOT ที่ไม่อยู่ในคิว (Auto LMS check - No confirmation)
+         * @param {string} scannedLot - หมายเลข LOT ที่ scan
+         */
+        async function handleUnknownLotScanned(scannedLot) {
+            if (!scannedLot) return;
+
+            console.log(`🔍 Processing unknown LOT: ${scannedLot}`);
+            
+            // ตรวจสอบว่า LOT อยู่ในคิวหรือไม่
+            const queue = getQueue();
+            const lotInQueue = queue.find(job => job.lot_no === scannedLot);
+            
+            if (lotInQueue) {
+                showNotification(`✅ พบ LOT ${scannedLot} ในคิว - กำลังเลือก...`, 'success');
+                findAndSelectJobByLot(scannedLot);
+                return;
+            }
+
+            // ถ้าไม่อยู่ในคิว ให้แสดง popup แจ้งเตือนก่อน
+            showLMSAlertPopup(
+                '⚠️ LOT Not in Job Queue',
+                `LOT ${scannedLot} not found in current job queue`,
+                null,
+                'warning',
+                3000
+            );
+
+            // สมมติว่าเป็นงานวาง (place_flg = "1") - สามารถปรับได้ตามความต้องการ
+            const placeFlg = "1";
+            
+            // รอ 1 วินาทีแล้วค่อยเรียก LMS
+            setTimeout(async () => {
+                const lmsResult = await checkShelfFromLMS(scannedLot, placeFlg);
+                
+                if (lmsResult && lmsResult.success) {
+                    console.log('📊 LMS Result:', lmsResult);
+                    // LMS popup จะแสดงใน checkShelfFromLMS แล้ว
+                    
+                    // สามารถเพิ่มการทำงานอื่นๆ ได้ที่นี่ เช่น สร้าง job ใหม่
+                } else if (lmsResult && !lmsResult.success) {
+                    // Error popup จะแสดงใน checkShelfFromLMS แล้ว
+                    console.log('❌ LMS Error:', lmsResult);
+                }
+            }, 1000);
+        }
+
+        /**
+         * Integration กับ barcode scanner ที่มีอยู่
+         * ปรับปรุงฟังก์ชัน findAndSelectJobByLot ให้รองรับ LMS
+         */
+        const originalFindAndSelectJobByLot = findAndSelectJobByLot;
+        
+        window.findAndSelectJobByLot = function(lotNo) {
+            if (!lotNo) return;
+
+            const queue = getQueue();
+            const foundJob = queue.find(job => job.lot_no === lotNo);
+
+            if (foundJob) {
+                // ใช้ฟังก์ชันเดิม
+                originalFindAndSelectJobByLot(lotNo);
+            } else {
+                // เรียก LMS integration
+                handleUnknownLotScanned(lotNo);
+            }
+        };
+
+        /**
+         * เรียก LMS API เพื่อตรวจสอบชั้นวางที่ถูกต้องสำหรับ LOT ที่ไม่อยู่ในคิว
+         * @param {string} lotNo - หมายเลข LOT
+         * @param {string} placeFlg - ประเภทงาน ("0" = หยิบ, "1" = วาง)
+         */
+        async function checkShelfFromLMS(lotNo, placeFlg) {
+            if (!lotNo) {
+                showLMSAlertPopup(
+                    '❌ Incomplete Data',
+                    'Please specify LOT number',
+                    null,
+                    'error',
+                    0
+                );
+                return null;
+            }
+
+            try {
+                // แสดง loading popup
+                showNotification(`🔍 Checking LOT ${lotNo} from LMS...`, 'info');
+                
+                const response = await fetch('/api/shelf/askCorrectShelf', {  // api/shelf/askCorrectShelf → Gateway → LMS
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        lot_no: lotNo,
+                        place_flg: placeFlg
+                    })
+                });
+
+                const result = await response.json();
+
+                if (response.ok && result.status === 'success') {
+                    // Success - แสดง location popup แบบใหม่
+                    showLMSLocationPopup(result.lot_no, result.correct_shelf, 'warning', 0);
+                    
+                    return {
+                        success: true,
+                        correctShelf: result.correct_shelf,
+                        lotNo: result.lot_no
+                    };
+                } else {
+                    // Error popup
+                    showLMSAlertPopup(
+                        '❌ Not found in LMS',
+                        `LOT ${lotNo} is not in the system`,
+                        null,
+                        'error',
+                        5000
+                    );
+                    
+                    return {
+                        success: false,
+                        error: result.error || 'Unknown error',
+                        message: result.message || 'No message provided'
+                    };
+                }
+
+            } catch (error) {
+                console.error('LMS API Error:', error);
+                
+                // Network error popup - แก้ไข parameter order
+                showLMSAlertPopup(
+                    '🚫 Connection Error',
+                    'Cannot connect to LMS system',
+                    null,
+                    'error',
+                    5000
+                );
+                
+                return {
+                    success: false,
+                    error: 'NETWORK_ERROR',
+                    message: error.message
+                };
+            }
+        }

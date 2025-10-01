@@ -1,0 +1,500 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        
+        html, body {
+            height: 100%;
+            width: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        body { 
+            font-family: 'Inter', sans-serif; 
+            background-color: #fff;
+        }
+        .main-content {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100%;
+            width: 100%;
+        }
+        .shelf-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 60px;
+            width: 100%;
+            height: 100%;
+            padding: 24px;
+            box-sizing: border-box;
+            transition: background-color 0.3s, flex-direction 0.3s;
+        }
+
+        .queue-drawer { position: fixed; top: 0; left: 0; width: 410px; max-width: 100vw; height: 100vh; background: #fff; box-shadow: 4px 0 24px rgba(0,0,0,0.13); z-index: 100; padding: 32px; transition: transform 0.33s cubic-bezier(.55,0,.32,1); transform: translateX(-100%); display: flex; flex-direction: column; }
+        .queue-drawer.open { transform: translateX(0); }
+        .queue-header { font-size: 2em; font-weight: 700; margin-bottom: 16px; margin-top: 0; }
+        .queue-list { flex: 1; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+        .queue-item { display: flex; justify-content: space-between; align-items: center; padding: 18px 0 12px 0; border-bottom: 1px solid #eee; gap: 8px; }
+        .queue-item-details { display: flex; flex-direction: column; line-height: 1.3; }
+        .queue-lot-no { font-weight: 600; font-size: 1.1em; }
+        .queue-emp-id { font-size: 14px; color: #6c757d; }
+        .queue-item button { font-size: 15px; padding: 6px 22px; cursor: pointer; background-color: #198754; color: white; border: none; border-radius: 6px; font-weight: 600; }
+        .queue-placeholder { color: #6c757d; font-style: italic; margin-top: 20px; }
+        .drawer-backdrop { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.07); z-index: 50; display: none; }
+        .drawer-backdrop.open {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        
+        /* --- START: Simple Desktop-Only 2-Column Layout --- */
+        .main-container {
+            display: flex;
+            align-items: flex-start;
+            justify-content: flex-start;
+            gap: 40px;
+            width: 100%;
+            height: 100vh;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        /* โหมดเต็มขนาดเมื่อไม่มี active job - ซ่อน cell preview */
+        .main-container.full-shelf-mode .cell-preview-container {
+            display: none;
+        }
+        
+        .shelf-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            max-width: 520px; /* จำกัดขนาดให้เท่ากับ shelf frame + padding */
+        }
+        
+        .cell-preview-container {
+            flex: 0 0 280px;
+            padding: 24px;
+            background: #f8f9fa;
+            border-radius: 16px;
+            border: 1px solid #dee2e6;
+            min-height: 400px;
+            margin-top: 65px; /* เพิ่ม margin เพื่อให้ตำแหน่งดี */
+        }
+        
+        .cell-preview-container h3 {
+            font-size: 1.5em;
+            color: #343a40;
+            margin: 0 0 16px 0;
+        }
+        
+        .cell-preview-content {
+            color: #6c757d;
+        }
+        /* --- END: New 3-Column Layout --- */
+
+        /* --- END: Simple Desktop-Only Full Shelf Layout --- */
+
+        /* --- START: สไตล์สำหรับหน้าเลือกงาน (Queue View) --- */
+        #queueSelectionView {
+            width: 100%;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .queue-view-title {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: #343a40;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        #queueListContainer {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .queue-list-item {
+            background-color: #fff;
+            border: 1px solid #dee2e6;
+            border-radius: 12px;
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.06);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .queue-list-item:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.1);
+        }
+        .queue-list-item .info .lot {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #212529;
+        }
+        .queue-list-item .info .action {
+            font-size: 0.9rem;
+            color: #6c757d;
+            margin-top: 4px;
+        }
+        .queue-list-item .select-btn {
+            background-color: #28a745;
+            color: white;
+            border: none;
+            padding: 10px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 1rem;
+            transition: background-color 0.2s;
+        }
+        .queue-list-item .select-btn:hover {
+            background-color: #218838;
+        }
+        /* --- END: สไตล์สำหรับหน้าเลือกงาน --- */
+
+        .main-content.blurred { filter: blur(2px) grayscale(0.3); }
+        
+        /* --- START: Shelf Panel & Grid Styles --- */
+        /* 
+          หมายเหตุ: ขนาด, padding, และ gap ของ grid และ frame
+          จะถูกควบคุมโดย JavaScript ในไฟล์ ui_logic.js แบบไดนามิก
+          เพื่อรองรับ Shelf Configuration ที่ยืดหยุ่น
+        */
+        .shelf-panel h2 { 
+            font-size: 2em; 
+            color: #343a40; 
+            margin: 0 0 20px 0; 
+            text-align: center; 
+        }
+
+        .shelf-grid { 
+            background-color: #f8f9fa; 
+            border: 1px solid #dee2e6;
+            box-sizing: border-box;
+            width: 100%;
+            height: 100%;
+        }
+
+        .shelf-frame { 
+            border: 8px solid #adb5bd; 
+            border-radius: 8px; 
+            display: inline-block; 
+            padding: 0;
+            width: 500px; /* ใช้ขนาดเดียวกันทั้งสองโหมด */
+            height: 475px; /* ใช้ขนาดเดียวกันทั้งสองโหมด */
+            margin: 0 auto;
+            /* ขนาดคงที่ไม่แยกตามโหมด */
+        }
+
+        /* --- END: Shelf Panel & Grid Styles --- */
+
+        .shelf-cell { 
+            background-color: #fff; 
+            border: 1px solid #e9ecef; 
+            border-radius: 4px; 
+            transition: background .18s;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            padding: 3px;
+        }
+        
+        .stacked-lot {
+            background-color: #95a5a6; /* เปลี่ยนจาก #6c757d เป็นสีเทาสว่างขึ้น */
+            border: none;
+            border-radius: 3px;
+            margin-bottom: 2px;
+            display: block;
+            font-size: 0; /* ซ่อนข้อความ */
+            height: auto;
+            min-height: 8px;
+        }
+        
+        .stacked-lot.target-lot {
+            background-color: #4dabf7; /* เปลี่ยนจาก #0d6efd เป็นสีฟ้าสว่างขึ้น */
+            border: none;
+        }
+        .shelf-cell-empty { display: none; } /* ซ่อนช่องว่างที่ไม่ใช้ */
+        
+        /* Dynamic cell sizes for flexible shelf configuration */
+        .shelf-cell.size-small { width: 50px; height: 50px; }
+        .shelf-cell.size-medium { width: 60px; height: 60px; }
+        .shelf-cell.size-large { width: 100px; height: 100px; }
+        .shelf-cell.size-xlarge { width: 130px; height: 130px; }
+        .shelf-cell.has-item { background-color: #adb5bd; border-color: #6c757d; }
+        .shelf-cell.selected-task { background-color: #0d6efd !important; border-color: #0d6efd !important; } 
+        .shelf-cell.wrong-location {
+            /* ลบ background-color และ box-shadow เก่าออก */
+            border-color: #b02a37 !important;
+            animation: blink-red-error 1.2s infinite ease-in-out; /* << เพิ่มอนิเมชัน */
+        }
+        .back-to-queue-btn { background: none; border: none; color: #0d6efd; cursor: pointer; font-size: 16px; padding: 8px; margin-top: 20px; text-align: center; width: 100%; }
+        .back-to-queue-btn:hover { text-decoration: underline; }
+        
+        .back-to-queue-fixed-btn {
+            background: #6c757d;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .back-to-queue-fixed-btn:hover {
+            background: #5a6268;
+        }
+        .shelf-container.error-state { background-color: #fff1f2; }
+        .shelf-cell.highlight-error { animation: blink-error 1.2s infinite ease-in-out; }
+        
+        /* *** START: เพิ่ม Keyframes สำหรับกระพริบสีแดง *** */
+        @keyframes blink-red-error {
+            0%   { background-color: #dc3545; box-shadow: 0 0 10px #dc3545; }
+            50%  { background-color: #fff; box-shadow: none; }
+            100% { background-color: #dc3545; box-shadow: 0 0 10px #dc3545; }
+        }
+        /* *** END: เพิ่ม Keyframes สำหรับกระพริบสีแดง *** */
+
+        @keyframes blink-error { 
+            0%   { background-color: #22c55e; }   /* เขียว */
+            50%  { background-color:rgb(255, 255, 255); }   /* ขาว */
+            100% { background-color: #22c55e; }   /* เขียว */
+        }
+
+        /* *** START: เพิ่ม Style สำหรับ Notification *** */
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background-color: #28a745;
+            color: white;
+            padding: 15px 25px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 1000;
+            font-size: 16px;
+            font-weight: 600;
+            animation: slide-in 0.5s forwards, slide-out 0.5s 2.5s forwards;
+        }
+
+        @keyframes slide-in {
+            from { transform: translateX(120%); }
+            to { transform: translateX(0); }
+        }
+
+        @keyframes slide-out {
+            from { transform: translateX(0); }
+            to { transform: translateX(120%); }
+        }
+        /* *** END: เพิ่ม Style สำหรับ Notification *** */
+        
+     
+
+        
+
+        .shelf-container {
+            justify-content: center;
+            align-items: center;
+        }        @media (max-width: 1300px) {
+            body { font-size: 14px; }
+            .shelf-container { gap: 30px; }
+            .shelf-panel h2 { font-size: 1.6em; margin-bottom: 15px; }
+        }
+
+        /* --- START: Optimized for Raspberry Pi 13.3" 1920x1080 --- */
+        @media (min-width: 1400px) and (max-width: 1920px) {
+            .shelf-container { gap: 80px; padding: 40px; }
+            .shelf-panel h2 { font-size: 2.4em; margin-bottom: 25px; }
+        }
+        /* --- END: Optimized for Raspberry Pi 13.3" --- */
+
+        .barcode-scanner-container {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+        }
+
+        #lot-no-input {
+            flex-grow: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        /* Animation สำหรับตอนหาไม่เจอ */
+        .shake {
+            animation: shake 0.5s ease-in-out;
+        }
+
+        @keyframes shake {
+            0% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            50% { transform: translateX(5px); }
+            75% { transform: translateX(-5px); }
+            100% { transform: translateX(0); }
+        }
+
+        /* เพิ่ม Visual Cue สำหรับช่อง Input ที่ Focus */
+#lot-no-input:focus {
+    border: 2px solid #007bff !important;
+    box-shadow: 0 0 10px rgba(0,123,255,0.5) !important;
+    outline: none;
+}
+
+/* เพิ่ม Placeholder ที่ชัดเจน */
+#lot-no-input::placeholder {
+    color: #6c757d;
+    font-style: italic;
+}
+
+/* --- START: Barcode Scanner Styles --- */
+        #barcode-scanner-input {
+            position: absolute !important;
+            left: -9999px !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
+            width: 1px !important;
+            height: 1px !important;
+            border: none !important;
+            background: transparent !important;
+        }
+
+        /* Notification Styles */
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 20px;
+            border-radius: 8px;
+            color: white;
+            font-weight: bold;
+            z-index: 1000;
+            max-width: 300px;
+            word-wrap: break-word;
+        }
+
+        .notification.success {
+            background-color: #28a745;
+        }
+
+        .notification.error {
+            background-color: #dc3545;
+        }
+
+        .notification.warning {
+            background-color: #ffc107;
+            color: #212529;
+        }
+
+        .notification.info {
+            background-color: #17a2b8;
+        }
+
+        /* Shake animation for input errors */
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+            20%, 40%, 60%, 80% { transform: translateX(5px); }
+        }
+
+        .shake {
+            animation: shake 0.5s;
+        }
+        /* --- END: Barcode Scanner Styles --- */
+
+/* --- START: Stacked Lot Styles for Shelf Grid --- */
+.shelf-cell .stacked-lot {
+  width: 80%;
+  margin: 0 auto 2px auto;
+  border-radius: 4px;
+  background: #d8e1e1; /* สีเทาสว่างให้สอดคล้องกับสไตล์หลัก */
+  transition: height 0.2s, background 0.2s;
+  display: block;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.07);
+}
+.shelf-cell .stacked-lot.target-lot {
+  background: #4dabf7; /* สีฟ้าสว่างให้สอดคล้องกับสไตล์หลัก */
+}
+/* --- END: Stacked Lot Styles --- */
+
+/* --- START: Cell Preview Styles --- */
+.lot-item {
+    background: #f8f9fa;
+    border: 2px solid #dee2e6;
+    border-radius: 8px;
+    padding: 8px 10px; /* ลด padding จาก 12px เป็น 8px 10px */
+    margin-bottom: 6px; /* ลดจาก 8px เป็น 6px */
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: all 0.3s ease;
+    min-height: 36px; /* เพิ่ม min-height เพื่อให้สม่ำเสมอ */
+}
+
+.lot-item.target-lot {
+    background: #e3f2fd;
+    border-color: #2196f3;
+    box-shadow: 0 2px 8px rgba(33, 150, 243, 0.2);
+}
+
+.lot-item.new-lot {
+    background: #f3e5f5;
+    border-color: #9c27b0;
+    border-style: dashed;
+    animation: pulse-new 2s infinite;
+}
+
+.lot-item.empty-slot {
+    background: #fafafa;
+    border-style: dashed;
+    color: #9e9e9e;
+    font-style: italic;
+}
+
+.lot-name {
+    font-weight: 600;
+    font-size: 12px; /* ลดขนาดจาก 14px เป็น 12px */
+    word-break: break-all; /* ให้ขึ้นบรรทัดใหม่ถ้าตัวอักษรยาวเกินไป */
+    line-height: 1.2;
+}
+
+.lot-header {
+    font-size: 16px;
+    font-weight: 600;
+    color: #333;
+    margin: 12px 0 8px 0;
+    border-bottom: 1px solid #dee2e6;
+    padding-bottom: 4px;
+}
+
+.new-badge {
+    background: #9c27b0;
+    color: white;
+    font-size: 10px;
+    font-weight: bold;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 8px;
+}
+
+.preview-action {
+    color: #666;
+    font-style: italic;
+    margin: 8px 0;
+    font-size: 14px;
+}
+
+@keyframes pulse-new {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+/* --- END: Cell Preview Styles --- */

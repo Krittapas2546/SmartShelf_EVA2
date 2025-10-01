@@ -1,0 +1,46 @@
+sequenceDiagram
+    participant LMS as LMS System<br/>(43.72.20.146:80)
+    participant Central as Central Gateway<br/>(43.72.20.238:5000)
+    participant DB as PostgreSQL<br/>(43.72.20.238:5432)
+    participant Shelf1 as Smart Shelf 1<br/>(192.168.1.100:8000)
+    participant Shelf2 as Smart Shelf 2<br/>(192.168.1.101:8000)
+
+    Note over LMS,Shelf2: ระบบใหม่ - Central Management (Updated)
+    
+    LMS->>Central: POST /api/command
+    Note right of LMS: {<br/>  "shelf_ID": "SHELF_001",<br/>  "lot_no": "LOT123",<br/>  "level": "1",<br/>  "block": "2",<br/>  "place_flg": "1",<br/>  "trn_status": "10"<br/>}
+    
+    Central->>DB: ค้นหา shelf จาก shelf_ID
+    Note right of Central: SELECT * FROM IoT_ShelfMaster<br/>WHERE ShelfID = 'SHELF_001'
+    DB-->>Central: shelf_info (IP, Port, Status)
+    Note left of DB: {<br/>  "shelf_id": "SHELF_001",<br/>  "ip": "192.168.1.100",<br/>  "port": 8000,<br/>  "status": "ACTIVE"<br/>}
+    
+    alt Shelf Found & Active
+        Central->>Shelf1: POST /command
+        Note right of Central: {<br/>  "lot_no": "LOT123",<br/>  "level": "1",<br/>  "block": "2",<br/>  "place_flg": "1",<br/>  "trn_status": "10"<br/>}
+        
+        Shelf1-->>Central: Response + jobId
+        Note left of Shelf1: {<br/>  "status": "success",<br/>  "jobId": "JOB_20250827_001",<br/>  "message": "Job created"<br/>}
+        
+        Central->>DB: บันทึก transaction log
+        Note right of Central: INSERT INTO IoT_SystemLog<br/>(EventType: 'LMS_COMMAND_FORWARD')
+        
+        Central->>LMS: Success Response
+        Note left of Central: {<br/>  "status": "success",<br/>  "shelf_id": "SHELF_001",<br/>  "shelf_ip": "192.168.1.100",<br/>  "job_id": "JOB_20250827_001",<br/>  "message": "Command forwarded"<br/>}
+        
+    else Shelf Not Found/Inactive
+        Central->>LMS: Error Response
+        Note left of Central: {<br/>  "error": "shelf_not_found",<br/>  "message": "Shelf SHELF_001 not found",<br/>  "shelf_id": "SHELF_001"<br/>}
+    end
+    
+    Note over LMS,Shelf2: User ทำงานที่ shelf...
+    
+    opt Job Completion Callback
+        Shelf1->>Central: POST /callback/job-status
+        Note right of Shelf1: {<br/>  "job_id": "JOB_20250827_001",<br/>  "status": "completed",<br/>  "message": "Job finished"<br/>}
+        
+        Central->>DB: อัปเดตสถานะ job
+        Note right of Central: UPDATE IoT_JobQueue<br/>SET Status = 'COMPLETED'
+        
+        Central-->>Shelf1: Callback acknowledged
+    end

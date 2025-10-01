@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <title>Test API - Smart Shelf Simulator</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; margin: 2em; background-color: #f0f2f5; }
+        .container { max-width: 700px; margin: auto; background: #fff; padding: 2em; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        h1, h2, h3 { color: #0056b3; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5em; }
+        label { display: block; margin-bottom: .5em; font-weight: 600; }
+        input, select { width: 100%; padding: 10px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+        button { width: 100%; padding: 12px; font-size: 1.1em; cursor: pointer; border: none; border-radius: 5px; margin-top: 1em; color: white; }
+        .primary-btn { background-color: #0d6efd; }
+        .success-btn { background-color: #198754; }
+        .danger-btn { background-color: #dc3545; }
+        pre { background-color: #2d333b; color: #cdd9e5; padding: 1em; border-radius: 5px; }
+        hr { border: none; border-top: 1px solid #eee; margin: 2em 0; }
+        /* >> CSS ใหม่สำหรับ Grid << */
+        .stk-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; margin: 12px 0 20px 0; }
+        .stk-cell { aspect-ratio: 1 / 1; border: 1px solid #aaa; border-radius: 4px; background: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #888; }
+        .stk-cell.has-item { background: #28a745; color: #fff; border-color: #28a745; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Smart Shelf - Event Simulator</h1>
+        
+        <!-- LED Control by Position -->
+        <h2>🔵 LED Control by Position</h2>
+        <div class="form-grid">
+            <div>
+                <label for="led-position">Position (e.g., L1B1):</label>
+                <input type="text" id="led-position" placeholder="L1B1" value="L1B1">
+            </div>
+            <div>
+                <label for="led-color">Color:</label>
+                <select id="led-color">
+                    <option value="255,0,0">Red</option>
+                    <option value="0,255,0">Green</option>
+                    <option value="0,0,255">Blue</option>
+                    <option value="255,255,0">Yellow</option>
+                    <option value="255,0,255">Purple</option>
+                    <option value="0,255,255">Cyan</option>
+                    <option value="255,255,255">White</option>
+                </select>
+            </div>
+        </div>
+        <button onclick="controlLEDByPosition()" class="primary-btn">Control LED by Position</button>
+        
+        <!-- Multiple LED Control -->
+        <h3>🌈 Multiple LEDs Control</h3>
+        <div class="form-grid">
+            <div>
+                <label for="multi-positions">Positions (comma separated):</label>
+                <input type="text" id="multi-positions" placeholder="L1B1,L1B2,L1B3" value="L1B1,L1B2,L1B3">
+            </div>
+            <div>
+                <label for="multi-color">Color for all:</label>
+                <select id="multi-color">
+                    <option value="0,0,255">Blue</option>
+                    <option value="255,0,0">Red</option>
+                    <option value="0,255,0">Green</option>
+                    <option value="255,255,0">Yellow</option>
+                </select>
+            </div>
+        </div>
+        <button onclick="controlMultipleLEDs()" class="success-btn">Control Multiple LEDs</button>
+        
+        <!-- LED Clear -->
+        <button onclick="clearAllLEDs()" class="danger-btn">Clear All LEDs</button>
+        
+        <hr>
+
+        <!-- 1. Create New Job -->
+        <h2>1. Create New Job</h2>
+        <div class="form-grid" oninput="updateJsonPreview()">
+            <div class="form-group"><label>Lot No.</label><input type="text" id="lot_no" value="ABC123"></div>
+            <div class="form-group"><label>Action (place_flg)</label><select id="place_flg"><option value="1">1 (Place)</option><option value="0">0 (Pick)</option></select></div>
+            <div class="form-group"><label>Level (Row)</label><input type="number" id="level" value="1" min="1" max="4"></div>
+            <div class="form-group"><label>Block (Column)</label><input type="number" id="block" value="1" min="1" max="6"></div>
+        </div>
+        <h3>JSON Preview (for new job)</h3>
+        <pre><code id="json-preview"></code></pre>
+        <button onclick="scanNewLot()" class="primary-btn">Add New Job to Queue</button>
+
+        <hr>
+
+        <!-- 2. Simulate Operator Actions -->
+        <h2>2. Simulate Operator Actions</h2>
+        <p>Actions below will affect the <b>first job</b> in the queue.</p>
+        <div class="action-grid">
+            <button onclick="simulateTaskComplete()" class="success-btn">Simulate Task Complete</button>
+            <button onclick="simulateWrongPick()" class="danger-btn">Simulate Wrong Pick</button>
+        </div>
+
+        <hr>
+
+        <!-- 3. System Controls -->
+        <h2>3. System Controls</h2>
+        <div class="action-grid">
+            <button onclick="clearAllData()" class="warning-btn">Reset Entire System</button>
+        </div>
+
+        <div id="status-message" class="status-message">Ready</div>
+        <div class="link-to-ui"><a href="/" target="_blank">Open Shelf UI in New Tab</a></div>
+    </div>
+
+    <script>
+        const ROWS = 4, COLS = 6;
+        const GLOBAL_SHELF_STATE_KEY = 'globalShelfState';
+
+        function getGlobalShelfState() { return JSON.parse(localStorage.getItem(GLOBAL_SHELF_STATE_KEY) || '[]'); }
+        function setGlobalShelfState(state) { localStorage.setItem(GLOBAL_SHELF_STATE_KEY, JSON.stringify(state)); }
+
+        function initializeGlobalShelfState() {
+            if (getGlobalShelfState().length > 0) return;
+            const initialState = Array.from({ length: ROWS * COLS }, (_, i) => {
+                const level = Math.floor(i / COLS) + 1;
+                const block = (i % COLS) + 1;
+                return [level, block, 0]; // [level, block, hasItem]
+            });
+            setGlobalShelfState(initialState);
+        }
+
+        // >> ฟังก์ชันใหม่: วาด Grid สำหรับแก้ไข <<
+        function renderGlobalShelfGrid() {
+            const gridEl = document.getElementById('globalShelfGrid');
+            const shelfState = getGlobalShelfState();
+            gridEl.innerHTML = '';
+            shelfState.forEach(([level, block, hasItem]) => {
+                const cell = document.createElement('div');
+                cell.className = 'stk-cell' + (hasItem ? ' has-item' : '');
+                cell.textContent = `${level}${block}`;
+                cell.onclick = () => toggleShelfItem(level, block);
+                gridEl.appendChild(cell);
+            });
+        }
+
+        // >> ฟังก์ชันใหม่: สลับสถานะของในช่อง <<
+        function toggleShelfItem(level, block) {
+            const shelfState = getGlobalShelfState();
+            const itemIndex = shelfState.findIndex(([l, b]) => l === level && b === block);
+            if (itemIndex > -1) {
+                shelfState[itemIndex][2] = shelfState[itemIndex][2] === 0 ? 1 : 0; // Toggle hasItem
+                setGlobalShelfState(shelfState);
+                renderGlobalShelfGrid(); // วาด Grid ใหม่
+                updateJsonPreview();   // อัปเดต Preview
+            }
+        }
+
+        function buildJobObject() {
+            const lotNoEl = document.getElementById('lot_no');
+            const levelEl = document.getElementById('level');
+            const blockEl = document.getElementById('block');
+            const placeFlagEl = document.getElementById('place_flg');
+            
+            if (!lotNoEl || !levelEl || !blockEl || !placeFlagEl) {
+                console.error('One or more form elements are missing!');
+                return null;
+            }
+            
+            const jobObject = {
+                lot_no: lotNoEl.value,
+                level: levelEl.value,
+                block: blockEl.value,
+                place_flg: placeFlagEl.value,
+                // Server will add default trn_status, timestamp, etc.
+            };
+            
+            return jobObject;
+        }
+
+        <script>
+        // LED Control by Position
+        async function controlLEDByPosition() {
+            const position = document.getElementById('led-position').value.trim().toUpperCase();
+            const colorValue = document.getElementById('led-color').value;
+            const [r, g, b] = colorValue.split(',').map(Number);
+            
+            if (!position) {
+                alert('Please enter a position (e.g., L1B1)');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/led/position', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        position: position,
+                        r: r,
+                        g: g,
+                        b: b
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    alert(`✅ LED controlled successfully!
+Position: ${result.position}
+Color: RGB(${result.color.r}, ${result.color.g}, ${result.color.b})`);
+                } else {
+                    alert(`❌ Error: ${result.error}
+${result.message || ''}`);
+                }
+            } catch (error) {
+                alert(`❌ Network error: ${error.message}`);
+            }
+        }
+        
+        // Multiple LEDs Control
+        async function controlMultipleLEDs() {
+            const positionsText = document.getElementById('multi-positions').value.trim();
+            const colorValue = document.getElementById('multi-color').value;
+            const [r, g, b] = colorValue.split(',').map(Number);
+            
+            if (!positionsText) {
+                alert('Please enter positions (e.g., L1B1,L1B2,L1B3)');
+                return;
+            }
+            
+            const positions = positionsText.split(',').map(pos => ({
+                position: pos.trim().toUpperCase(),
+                r: r,
+                g: g,
+                b: b
+            }));
+            
+            try {
+                const response = await fetch('/api/led/positions', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({positions: positions})
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    alert(`✅ ${result.count} LEDs controlled successfully!
+Positions: ${result.positions.join(', ')}`);
+                } else {
+                    alert(`❌ Error: ${result.error}
+${result.message || ''}`);
+                }
+            } catch (error) {
+                alert(`❌ Network error: ${error.message}`);
+            }
+        }
+        
+        // Clear All LEDs
+        async function clearAllLEDs() {
+            try {
+                const response = await fetch('/api/led/clear', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    alert('✅ All LEDs cleared successfully!');
+                } else {
+                    alert(`❌ Error clearing LEDs: ${result.error}`);
+                }
+            } catch (error) {
+                alert(`❌ Network error: ${error.message}`);
+            }
+        }
+        
+        // Original functions...
+        function updateJsonPreview() {
+            const jobObject = buildJobObject();
+            if (!jobObject) {
+                document.getElementById('json-preview').textContent = '/* Error: Could not build job object. */';
+                return;
+            }
+            document.getElementById('json-preview').textContent = JSON.stringify(jobObject, null, 4);
+        }
+
+        // --- ฟังก์ชันที่เชื่อมต่อกับ API ---
+
+        async function scanNewLot() {
+            const payload = buildJobObject();
+            if (!payload) return showStatus('ERROR: Cannot create job!', 'red');
+            
+            const response = await fetch('/command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (response.ok) {
+                showStatus(`SUCCESS: Sent "New Job" event for Lot ${payload.lot_no}`, 'green');
+            } else {
+                showStatus(`ERROR: Failed to create job. Server responded with ${response.status}`, 'red');
+            }
+        }
+
+        async function getFirstJobFromServer() {
+            try {
+                const response = await fetch('/command');
+                if (!response.ok) return null;
+                const data = await response.json();
+                return (data && data.jobs && data.jobs.length > 0) ? data.jobs[0] : null;
+            } catch (error) {
+                console.error("Failed to fetch jobs:", error);
+                return null;
+            }
+        }
+
+        async function simulateTaskComplete() {
+            const firstJob = await getFirstJobFromServer();
+            if (!firstJob) return showStatus('ERROR: No jobs in the queue.', 'red');
+
+            await fetch(`/command/${firstJob.jobId}/complete`, { method: 'POST' });
+            showStatus(`SUCCESS: Sent "Task Complete" for Lot ${firstJob.lot_no}`, 'green');
+        }
+
+        async function simulateWrongPick() {
+            const firstJob = await getFirstJobFromServer();
+            if (!firstJob) return showStatus('ERROR: No jobs in the queue.', 'red');
+
+            const shelfStateResponse = await fetch('/api/shelf/state');
+            const shelfStateData = await shelfStateResponse.json();
+            const emptyCell = shelfStateData.shelf_state.find(cell => cell[2] === 0);
+            
+            if (!emptyCell) return showStatus('ERROR: No empty cells to simulate error.', 'orange');
+
+            const errorPayload = { errorLocation: { level: emptyCell[0], block: emptyCell[1] } };
+
+            await fetch(`/command/${firstJob.jobId}/error`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(errorPayload)
+            });
+            showStatus(`ERROR: Sent "Wrong Pick" for Lot ${firstJob.lot_no}`, 'red');
+        }
+
+        async function clearAllData() {
+            if (confirm('Are you sure you want to reset the entire system on the server?')) {
+                await fetch('/api/system/reset', { method: 'POST' });
+                showStatus('SYSTEM RESET: Sent "Reset" event to server.', 'orange');
+            }
+        }
+
+        function showStatus(message, color) {
+            const statusDiv = document.getElementById('status-message');
+            statusDiv.textContent = message;
+            statusDiv.className = `status-message ${color}`;
+        }
+
+        // --- Initial Load ---
+        // ไม่ต้องใช้ Shelf State Editor ในหน้านี้อีกต่อไป
+        // initializeGlobalShelfState();
+        // renderGlobalShelfGrid();
+        updateJsonPreview();
+    </script>
+</body>
+</html>

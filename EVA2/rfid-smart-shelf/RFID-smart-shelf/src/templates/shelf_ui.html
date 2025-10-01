@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Shelf UI</title>
+    <!-- 1. เรียกใช้ไฟล์ CSS ภายนอก -->
+    <link rel="stylesheet" href="/static/css/ui_styles.css">
+    <style>
+      /* Global Scale Up for 1280x780 Screen */
+      html {
+        font-size: 20px; /* เพิ่มจาก 16px เป็น 20px = เพิ่ม 25% */
+      }
+      
+      body {
+        transform: scale(1.3); /* ขยายทุกอย่าง 30% */
+        transform-origin: top left;
+        width: 76.92%; /* 100/1.3 = 76.92% เพื่อชดเชยการ scale */
+        height: 76.92%;
+        margin: 0;
+        padding: 20px;
+        overflow: hidden; /* ป้องกันการ scroll */
+        box-sizing: border-box;
+      }
+      
+      .arrow {
+        width: 0;
+        height: 0;
+        border-left: 12px solid transparent;
+        border-right: 12px solid transparent;
+        display: inline-block;
+        vertical-align: middle;
+        margin-right: 8px;
+      }
+      .arrow.up {
+        border-bottom: 18px solid #45a2e0ff;
+        animation: bounce-up 1s infinite;
+      }
+      .arrow.down {
+        border-top: 18px solid #2ecc71;
+        animation: bounce-down 1s infinite;
+      }
+      @keyframes bounce-up {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-6px); }
+      }
+      @keyframes bounce-down {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(6px); }
+      }
+      .queue-list-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        padding: 18px 24px;
+        margin-bottom: 18px;
+        min-height: 56px;
+      }
+      .queue-list-item .info {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .queue-list-item .lot {
+        font-size: 1.15em;
+        font-weight: bold;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .queue-list-item .action {
+        font-size: 0.98em;
+        color: #666;
+        margin-left: 2px;
+      }
+      .select-btn {
+        background: #27ae60;
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        padding: 8px 22px;
+        font-size: 1em;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+      .select-btn:hover {
+        background: #219150;
+      }
+
+      /* Layout สำหรับ 2 ฝั่ง */
+      .queue-container {
+        display: flex;
+        gap: 30px;
+        margin-top: 20px;
+      }
+
+      .queue-section {
+        flex: 1;
+        min-height: 400px;
+      }
+
+      .queue-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+
+      /* ปรับปรุง queue-list-item สำหรับ layout ใหม่ */
+      .queue-list .queue-list-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        padding: 18px 24px;
+        margin-bottom: 18px;
+        min-height: 56px;
+      }
+
+      .queue-list .queue-list-item:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+      }
+
+      /* Styles for Queue Header with Back Button */
+      .queue-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+      }
+
+      .back-to-main-btn {
+        position: fixed;
+        bottom: 10px;
+        left: 10px;
+        background: #6c757d;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 12px 24px;
+        font-size: 1.1em;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        z-index: 2000;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      }
+
+      .back-to-main-btn:hover {
+        background: #5a6268;
+        transform: translateY(-1px);
+      }
+
+      /* Styles for Queue Notification Button */
+      .queue-notification-btn {
+        position: fixed;
+        bottom: 20px;
+        left: 20px;
+        background: linear-gradient(135deg, #007bff, #0056b3);
+        color: white;
+        border: none;
+        border-radius: 50px;
+        padding: 15px 25px;
+        font-size: 1em;
+        font-weight: 600;
+        cursor: pointer;
+        box-shadow: 0 4px 15px rgba(0, 123, 255, 0.3);
+        transition: all 0.3s ease;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        z-index: 1000;
+        min-width: 160px;
+      }
+
+      .queue-notification-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(0, 123, 255, 0.4);
+      }
+
+      .queue-icon {
+        font-size: 1.2em;
+      }
+
+      .queue-count-badge {
+        background: #dc3545;
+        color: white;
+        border-radius: 50%;
+        padding: 4px 8px;
+        font-size: 0.9em;
+        font-weight: bold;
+        min-width: 20px;
+        text-align: center;
+        line-height: 1;
+      }
+
+      .queue-text {
+        font-size: 0.95em;
+      }
+
+      /* Animation for queue notification */
+      @keyframes pulse-notification {
+        0% {
+          box-shadow: 0 4px 15px rgba(0, 123, 255, 0.3);
+        }
+        50% {
+          box-shadow: 0 4px 25px rgba(0, 123, 255, 0.6);
+        }
+        100% {
+          box-shadow: 0 4px 15px rgba(0, 123, 255, 0.3);
+        }
+      }
+
+      .queue-notification-btn.pulse {
+        animation: pulse-notification 2s infinite;
+      }
+
+      /* Back to Queue Button Styles */
+      .back-to-queue-btn:hover {
+        background: #5a6268;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      }
+    </style>
+</head>
+<body>
+    <!-- 2. เพิ่มโครงสร้าง HTML สำหรับแสดงผล -->
+
+    <!-- View 1: หน้าสำหรับเลือกงานจากคิว -->
+    <div id="queueSelectionView" style="display: none; height: 100vh; overflow: hidden; position: relative;">
+
+        <!-- 🔽 ADD THIS ENTIRE BLOCK 🔽 -->
+        <div class="barcode-scanner-container">
+            <input type="text" id="lot-no-input" placeholder="🔍 Ready for Barcode Scanner - Scan or type Lot No.">
+            <button onclick="handleLotSearch()">Find Job</button>
+        </div>
+        <!-- 🔼 END OF ADDED BLOCK 🔼 -->
+
+        <!-- แบ่งเป็น 2 ฝั่ง -->
+        <div class="queue-container" style="height: calc(100vh - 150px); overflow-y: auto;">
+            <!-- ฝั่งซ้าย: งานวาง (Place) -->
+            <div class="queue-section place-section">
+                <ul id="placeQueueContainer" class="queue-list">
+                    <!-- Place jobs will be injected here -->
+                </ul>
+            </div>
+
+            <!-- ฝั่งขวา: งานหยิบ (Pick) -->
+            <div class="queue-section pick-section">
+                <ul id="pickQueueContainer" class="queue-list">
+                    <!-- Pick jobs will be injected here -->
+                </ul>
+            </div>
+        </div>
+
+        <!-- เก็บ container เดิมไว้สำหรับ backward compatibility -->
+        <ul id="queueListContainer" style="display: none;">
+            <!-- Job items will be injected here by JavaScript -->
+        </ul>
+
+        <!-- Back to Main Button - ย้ายมาอยู่ด้านล่าง -->
+        <button id="backToMainBtn" class="back-to-main-btn" onclick="goBackToMain()">
+            ← Back to Main
+        </button>
+    </div>
+
+    <!-- View 2: หน้าสำหรับทำงาน (Active Job) -->
+    <main id="mainView" style="display: none; position: relative;">
+        <!-- Back to Queue Button - เพิ่มปุ่มด้านล่าง -->
+        <button id="backToQueueBtn" class="back-to-main-btn" onclick="goBackToQueue()" style="
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            z-index: 1001;
+        ">
+            ← Back to Queue
+        </button>
+        
+        <!-- 🔽 ADD HIDDEN INPUT FOR BARCODE SCANNER 🔽 -->
+        <input type="text" id="barcode-scanner-input" style="position: absolute; left: -9999px; opacity: 0;" placeholder="Barcode Scanner Input">
+        <!-- 🔼 END OF ADDED INPUT 🔼 -->
+        
+        <!-- Queue notification button (แสดงเมื่อมี queue และอยู่ในโหมด main) -->
+        <div id="queueNotificationBtn" class="queue-notification-btn" onclick="goToQueueSelection()" style="display: none;">
+            <span class="queue-icon">📋</span>
+            <span class="queue-count-badge" id="queueCountBadge">0</span>
+            <span class="queue-text">Jobs Waiting</span>
+        </div>
+        
+        <div class="main-container">
+            <!-- Shelf Panel (กลาง) -->
+            <div class="shelf-panel">
+                <h2>Shelf</h2>
+                <div class="shelf-frame"><div class="shelf-grid" id="shelfGrid"></div></div>
+            </div>
+            
+            <!-- Cell Preview Panel (ขวา) -->
+            <div class="cell-preview-container" id="cellPreviewContainer">
+                <h3>Cell Preview</h3>
+                <div class="cell-preview-content" id="cellPreviewContent">
+                    <p>Select a cell to view details</p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 3. เรียกใช้ไฟล์ JavaScript ภายนอก (ควรวางไว้ท้าย body) -->
+    <script src="/static/js/ui_logic.js"></script>
+    <style>
+      /* Simple horizontal 3-column layout - desktop only */
+      .main-container {
+        display: flex;
+        align-items: flex-start;
+        justify-content: flex-start;
+        gap: 40px;
+        width: 100%;
+        height: 100vh;
+        padding: 20px;
+        box-sizing: border-box;
+      }
+      
+      .main-container.full-shelf-mode .details-panel,
+      .main-container.full-shelf-mode .cell-preview-container {
+        display: none;
+      }
+
+      .main-container.full-shelf-mode .shelf-panel {
+        flex: 1 1 100%; /* Take full width */
+        max-width: 100%;
+        justify-content: center; /* Center the shelf grid vertically */
+      }
+      
+      .details-panel {
+        flex: 0 0 280px;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+        padding: 24px;
+        background: #f8f9fa;
+        border-radius: 16px;
+        border: 1px solid #dee2e6;
+        min-height: 400px;
+      }
+      
+      .details-panel .lot-no-header {
+        font-size: 3.2em;
+        font-weight: 900;
+        color: #212529;
+        margin: 0 0 20px 0;
+        line-height: 1.1;
+      }
+      
+      .details-panel .status-section {
+        margin-bottom: 24px;
+      }
+      
+      .details-panel .status-label {
+        font-size: 1.2em;
+        color: #6c757d;
+        margin-bottom: 10px;
+      }
+      
+      .details-panel .pick-from-section .label {
+        font-size: 1.2em;
+        color: #6c757d;
+        margin-bottom: 10px;
+      }
+      
+      .details-panel .pick-from-section .location-info {
+        font-size: 1.5em;
+        font-weight: 600;
+        color: #343a40;
+        line-height: 1.4;
+      }
+      
+      .cell-preview-container {
+        flex: 0 0 300px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      
+      .cell-preview-container h3 {
+        font-size: 1.3em;
+        font-weight: bold;
+        margin: 0 0 15px 0;
+        text-align: center;
+        color: #343a40;
+      }
+      
+      .block-preview {
+        border: 3px solid #343a40;
+        border-radius: 12px;
+        background: #f8f9fa;
+        padding: 20px;
+        width: 250px;
+        height: 350px;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        gap: 8px;
+        overflow: hidden;
+      }
+      
+      .lot-item {
+        border-radius: 8px;
+        border: 2px solid #6c757d;
+        background: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 600;
+        font-size: 0.95em;
+        transition: all 0.2s;
+        min-height: 40px;
+        padding: 8px 12px;
+        text-align: center;
+        word-wrap: break-word;
+        overflow: hidden;
+      }
+      
+      .lot-item.target-lot {
+        background: repeating-linear-gradient(
+          135deg,
+          #e6f2ff,
+          #e6f2ff 10px,
+          #cce6ff 15px,
+          #e6f2ff 20px
+        );
+        border: 3px solid #0d6efd;
+        font-weight: bold;
+        color: #0d6efd;
+      }
+      
+      .lot-item.empty-slot {
+        height: 50px;
+        background: #e9ecef;
+        color: #6c757d;
+        font-style: italic;
+        border: 2px dashed #adb5bd;
+      }
+      
+      .shelf-panel {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        min-width: 400px;
+      }
+      
+      .shelf-panel h2 {
+        margin: 0 0 30px 0;
+        font-size: 2.2em;
+        color: #343a40;
+        font-weight: 700;
+      }
+      
+      /* Remove all responsive/mobile styles - desktop only */
+    </style>
+    
+
+
+</body>
+</html>
+</html>
