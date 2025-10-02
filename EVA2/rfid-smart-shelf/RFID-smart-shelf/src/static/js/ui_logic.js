@@ -1413,15 +1413,11 @@ function getCellCapacity(level, block) {
             } else {
                 console.warn('⚠️ WebSocket not available, using HTTP fallback');
                 
-                fetch('/command/complete', {
+                fetch(`/command/${activeJob.jobId}/complete`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        job_id: activeJob.jobId,
-                        lot_no: activeJob.lot_no
-                    })
+                    }
                 })
                 .then(response => {
                     return response.json();

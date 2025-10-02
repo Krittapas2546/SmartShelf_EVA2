@@ -2,11 +2,14 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 
 class JobRequest(BaseModel):
-    lot_no: str = Field(..., example="Y531103TL.07")
+    biz: str = Field(..., example="IS")
+    shelf_id: str = Field(..., example="DESI-001")
+    lot_no: str = Field(..., example="Y531146TL.28")
     level: str = Field(..., example="1")
     block: str = Field(..., example="2")
     place_flg: str = Field(..., example="1")
-    tray_count: str = Field(..., example="10")
+    trn_status: str = Field(..., example="1")
+    tray_count: str = Field(..., example="20")
 
 class ErrorRequest(BaseModel):
     errorLocation: dict = Field(..., example={"level": 1, "block": 2, "message": "Wrong position scanned"})
@@ -39,3 +42,13 @@ class LMSCheckShelfResponse(BaseModel):
     correct_shelf: str = Field(..., example="AM_BURN_S_0006")
     lot_no: str = Field(..., example="Y531103TL.07")
     message: str = Field(..., example="Found correct shelf for Y531103TL.07")
+
+class ShelfComplete(BaseModel):
+    biz: str = Field(..., example="IS")
+    shelf_id: str = Field(..., example="DESI-001")
+    lot_no: str = Field(..., example="Y531146TL.28")
+    level: str = Field(..., example="1")
+    block: str = Field(..., example="2")
+    place_flg: str = Field(..., example="1")
+    trn_status: str = Field(..., example="1")
+    tray_count: str = Field(..., example="20")

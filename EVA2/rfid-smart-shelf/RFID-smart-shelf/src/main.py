@@ -7,6 +7,8 @@ import os
 import signal
 import subprocess
 import json
+import httpx
+import asyncio
 # --- Import Routers จากไฟล์ที่เราสร้าง ---
 from api import jobs, websockets
 
@@ -15,8 +17,32 @@ app = FastAPI(
     title="Smart Shelf API (Refactored)",
     description="A professional, well-structured server for the Smart Shelf system.",
     version="3.0.0"
-    
 )
+
+# ฟังก์ชันเรียกใช้ตอนเริ่มต้นระบบ
+async def initialize_shelf_info():
+    """เรียก /ShelfName เพื่อดึงข้อมูล shelf_id และเก็บไว้ใน global variable"""
+    try:
+        print("🔄 Initializing shelf information...")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get("http://localhost:8000/ShelfName")
+            if response.status_code == 200:
+                data = response.json()
+                print(f"✅ Shelf initialized: {data.get('shelf_id')} ({data.get('shelf_name')})")
+                return True
+            else:
+                print(f"⚠️ Failed to initialize shelf info: {response.status_code}")
+                return False
+    except Exception as e:
+        print(f"❌ Error initializing shelf info: {e}")
+        return False
+
+@app.on_event("startup")
+async def startup_event():
+    """เรียกใช้ฟังก์ชัน initialization เมื่อแอปพลิเคชันเริ่มต้น"""
+    # รอสักครู่ให้เซิร์ฟเวอร์เริ่มต้นเสร็จก่อน
+    await asyncio.sleep(2)
+    await initialize_shelf_info()
 
 
 STATIC_PATH = pathlib.Path(__file__).parent / "static"

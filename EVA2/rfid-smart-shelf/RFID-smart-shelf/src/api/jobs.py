@@ -11,7 +11,7 @@ from datetime import datetime
 from core.led_controller import set_led
 
 # --- Import จากไฟล์ที่เราสร้างขึ้น ---
-from core.models import JobRequest, ErrorRequest, LEDPositionRequest, LEDPositionsRequest, LMSCheckShelfRequest, LMSCheckShelfResponse
+from core.models import JobRequest, ErrorRequest, LEDPositionRequest, LEDPositionsRequest, LMSCheckShelfRequest, LMSCheckShelfResponse, ShelfComplete
 from core.database import (
     DB, get_job_by_id, get_lots_in_position, add_lot_to_position, remove_lot_from_position, update_lot_quantity, validate_position, get_shelf_info, SHELF_CONFIG
 )
@@ -20,6 +20,13 @@ from api.websockets import manager # <-- impor        },
 
 # Gateway Configuration  
 GATEWAY_BASE_URL = "http://43.72.20.238:8000"  # Gateway server URL
+
+# Global shelf information (filled during startup)
+GLOBAL_SHELF_INFO = {
+    "shelf_id": None,
+    "shelf_name": None,
+    "local_ip": None
+}
 
 def get_actual_local_ip():
     """ดึง local IP address ที่แท้จริง (ไม่ใช่ 127.0.0.1)"""
@@ -44,57 +51,11 @@ def get_actual_local_ip():
 # === Gateway Logging Functions ===
 async def log_to_gateway(event_type: str, event_data: dict, shelf_id: str = None):
     """
-    ส่ง log events ไปยัง Gateway
-    ✅ ส่ง actual IP address ใน header เพื่อให้ Gateway detect shelf_id ได้
+    Gateway logging disabled - Gateway API requires full ShelfComplete format
+    Only ShelfComplete data is sent via send_shelf_complete_to_gateway()
     """
-    try:
-        # ดึง actual local IP address
-        actual_ip = get_actual_local_ip()
-        
-        log_payload = {
-            "logs": [{
-                "shelf_log_id": f"LOG_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{event_type}",
-                "event_type": event_type,
-                "level": event_data.get("level"),
-                "block": event_data.get("block"),
-                "lot_no": event_data.get("lot_no"),
-                "event_detail": event_data,
-                "status": "COMPLETED",
-                "createdate": datetime.now().isoformat()
-            }]
-        }
-        
-        # ✅ ส่ง actual IP ใน header
-        headers = {
-            "Content-Type": "application/json",
-            "X-Forwarded-For": actual_ip,  # Original client IP
-            "X-Real-IP": actual_ip         # Real client IP
-        }
-        
-        print(f"🔍 Sending to Gateway: {GATEWAY_BASE_URL}/shelf/logs")
-        print(f"📦 Payload: {log_payload}")
-        print(f"🌐 Actual IP: {actual_ip}")
-        
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.post(
-                f"{GATEWAY_BASE_URL}/shelf/logs",
-                json=log_payload,
-                headers=headers
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                detected_shelf = result.get("shelf_id", "Unknown")
-                print(f"📝 Logged to Gateway: {event_type} (Auto-detected: {detected_shelf})")
-                return True
-            else:
-                error_detail = response.text
-                print(f"⚠️ Gateway log failed: {response.status_code} - {error_detail}")
-                return False
-                
-    except Exception as e:
-        print(f"⚠️ Gateway logging error: {e}")
-        return False
+    print(f"📝 Local log: {event_type} - {event_data}")
+    return True  # Always return success to avoid breaking existing code
 
 async def get_logs_from_gateway(limit: int = 20, event_type: str = None):
     """ดึง logs จาก Gateway (ใช้ auto-detected shelf_id)"""
@@ -106,7 +67,7 @@ async def get_logs_from_gateway(limit: int = 20, event_type: str = None):
         # ✅ ใช้ endpoint ใหม่ที่ Gateway auto-detect shelf จาก IP
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(
-                f"{GATEWAY_BASE_URL}/shelf/logs/query",
+                f"{GATEWAY_BASE_URL}/IoTManagement/shelf/requestID",
                 params=params
             )
             
@@ -117,6 +78,59 @@ async def get_logs_from_gateway(limit: int = 20, event_type: str = None):
                 
     except Exception as e:
         return {"error": str(e)}
+
+async def send_shelf_complete_to_gateway(job: dict):
+    """
+    ส่งข้อมูล ShelfComplete ไปยัง Gateway API
+    ใช้ข้อมูลจาก job (ที่มี biz และ shelf_id ครบถ้วนแล้ว)
+    """
+    try:
+        # ตรวจสอบข้อมูลที่จำเป็น
+        if not job.get("biz"):
+            print(f"⚠️ Warning: Missing biz in job {job.get('jobId', 'unknown')}")
+            return False
+            
+        # สร้างข้อมูล ShelfComplete ตาม Gateway API format
+        shelf_complete_data = {
+            "biz": job["biz"],  # บังคับต้องมี
+            "shelf_id": job.get("shelf_id", "UNKNOWN"),
+            "lot_no": job["lot_no"],
+            "level": str(job["level"]),
+            "block": str(job["block"]),
+            "place_flg": str(job["place_flg"]),
+            "trn_status": str(job.get("trn_status", "1")),  # ใช้ค่าเดิมจาก job
+            "tray_count": str(job.get("tray_count", 1)),
+            "status": "success"  # สำคัญ! Gateway ต้องการฟิลด์นี้เพื่อ mark เป็น completed
+        }
+        
+        headers = {
+            "Accept": "application/json", 
+            "Content-Type": "application/json"
+        }
+        
+        print(f"🔍 Sending ShelfComplete to Gateway: {GATEWAY_BASE_URL}/shelf/complete")
+        print(f"📦 Payload: {shelf_complete_data}")
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{GATEWAY_BASE_URL}/shelf/complete",
+                json=shelf_complete_data,
+                headers=headers
+            )
+            
+            print(f"📡 Gateway Response Status: {response.status_code}")
+            print(f"📄 Gateway Response Body: {response.text}")
+            
+            if response.status_code == 200:
+                print(f"✅ ShelfComplete sent successfully")
+                return True
+            else:
+                print(f"⚠️ Gateway ShelfComplete failed: {response.status_code} - {response.text}")
+                return False
+                
+    except Exception as e:
+        print(f"⚠️ ShelfComplete Gateway error: {e}")
+        return False
 
 router = APIRouter() # <-- สร้าง router สำหรับไฟล์นี้
 templates = Jinja2Templates(directory=str(pathlib.Path(__file__).parent.parent / "templates"))
@@ -211,16 +225,9 @@ async def control_led_by_position(request: LEDPositionRequest):
         # Control LED
         result = set_led(level, block, r, g, b)
         
-        # 📝 Log LED control to Gateway
+        # LED control logged locally only
         hex_color = f"#{r:02x}{g:02x}{b:02x}"
-        await log_to_gateway("LED_ON", {
-            "level": str(level),
-            "block": str(block),
-            "lot_no": None,
-            "color": hex_color,
-            "reason": "api_request",
-            "brightness": 100
-        })
+        print(f"💡 LED Control: L{level}B{block} = {hex_color}")
         
         result.update({
             "position": position,
@@ -320,11 +327,8 @@ async def clear_leds():
         from core.led_controller import clear_all_leds
         clear_all_leds()
         
-        # 📝 Log LED clear to Gateway
-        await log_to_gateway("LED_OFF", {
-            "reason": "clear_all_api",
-            "duration": None
-        })
+        # LED clear logged locally only
+        print(f"💡 All LEDs cleared via API")
         
         return {"ok": True}
     except Exception as e:
@@ -547,14 +551,13 @@ def get_all_lots_in_shelf():
 
 @router.post("/command", status_code=201, tags=["Jobs"])
 async def create_job_via_api(job: JobRequest):
-    # --- START: ปิดการตรวจสอบงานซ้ำชั่วคราว (สำหรับทดสอบ) ---
+    # ตรวจสอบงานซ้ำ
     existing_lot = any(j['lot_no'] == job.lot_no for j in DB["jobs"])
     if existing_lot:
          print(f"API: Rejected duplicate job for Lot {job.lot_no}")
          return {"status": "error", "message": f"Job for lot {job.lot_no} already exists in the queue."}
-    # --- END: ปิดการตรวจสอบ ---
 
-    # --- NEW: Validate lot exists in specified position (เฉพาะงานหยิบ) ---
+    # ตรวจสอบงานหยิบ (pick)
     if job.place_flg == "0":  # งานหยิบ (pick)
         level = int(job.level)
         block = int(job.block)
@@ -573,34 +576,44 @@ async def create_job_via_api(job: JobRequest):
         
         if not lot_exists:
             print(f"API: Rejected pick job for Lot {job.lot_no} - not found in L{level}B{block}")
-            print(f"API: Lots in cell ({level}, {block}): {[lot['lot_no'] for lot in lots_in_cell]}")
             return {
                 "status": "error", 
                 "message": f"Lot {job.lot_no} not found in position L{level}B{block}. Cannot create pick job for non-existent lot."
             }
         
         print(f"API: Validation passed - Lot {job.lot_no} exists in L{level}B{block}")
-    # --- END: Validation ---
 
     print(f"API: Received new job for Lot {job.lot_no}")
+    
+    # ตรวจสอบ biz (บังคับ)
+    if not hasattr(job, 'biz') or not job.biz:
+        print(f"API: Rejected job - missing biz field")
+        return {"status": "error", "message": "biz field is required"}
+    
+    # ใช้ shelf_id จาก global ถ้ามี หรือจาก request
+    shelf_id = GLOBAL_SHELF_INFO.get("shelf_id") or getattr(job, 'shelf_id', None)
+    if not shelf_id:
+        print(f"API: Warning - no shelf_id available, using UNKNOWN")
+        shelf_id = "UNKNOWN"
+    
+    # สร้าง job object
     new_job = job.dict()
-    # Ensure tray_count is int
-    tray_count = int(new_job.get("tray_count", 1))
-    new_job["tray_count"] = tray_count
+    new_job["shelf_id"] = shelf_id  # ใช้ shelf_id จาก global หรือ request
+    
+    # เพิ่ม tray_count default ถ้าไม่มี
+    if "tray_count" not in new_job:
+        new_job["tray_count"] = 1
+    else:
+        new_job["tray_count"] = int(new_job.get("tray_count", 1))
+    
     DB["job_counter"] += 1
     new_job["jobId"] = f"job_{DB['job_counter']}"
     DB["jobs"].append(new_job)
     
-    # 📝 Log job creation to Gateway
-    await log_to_gateway("JOB_CREATED", {
-        "job_id": new_job["jobId"],
-        "lot_no": new_job["lot_no"],
-        "level": new_job["level"],
-        "block": new_job["block"],
-        "place_flg": new_job["place_flg"],
-        "tray_count": tray_count,
-        "source": "API"
-    })
+    print(f"✅ Created job {new_job['jobId']} - Biz: {new_job['biz']}, Shelf: {new_job['shelf_id']}, Lot: {new_job['lot_no']}")
+    
+    # Job creation logged locally only
+    print(f"📋 Job created: {new_job['jobId']} - {new_job['lot_no']} (Biz: {new_job['biz']}, Shelf: {new_job['shelf_id']})")
     
     await manager.broadcast(json.dumps({"type": "new_job", "payload": new_job}))
     return {"status": "success", "job_data": new_job}
@@ -611,30 +624,39 @@ async def complete_job(job_id: str):
     job = get_job_by_id(job_id)
     if not job:
         return {"status": "error", "message": "Job not found"}
+    
+    # ตรวจสอบข้อมูลที่จำเป็น
+    if not job.get("biz"):
+        print(f"⚠️ Job {job_id} missing biz field")
+        return {"status": "error", "message": "Job missing biz field"}
+    
     level = int(job["level"])
     block = int(job["block"])
     lot_no = job["lot_no"]
     tray_count = int(job.get("tray_count", 1))
+    biz = job["biz"]
+    shelf_id = job.get("shelf_id", "UNKNOWN")
+    
     if job["place_flg"] == "1":
         # วางของ: เพิ่ม lot เข้า cell
         add_lot_to_position(level, block, lot_no, tray_count)
         action = "placed"
     else:
-        # หยิบของ: ลบ lot ออกจาก cell (หรือ update tray_count ถ้าหยิบไม่หมด)
+        # หยิบของ: ลบ lot ออกจาก cell
         remove_lot_from_position(level, block, lot_no)
         action = "picked"
     
-    # 📝 Log job completion to Gateway
-    await log_to_gateway("JOB_COMPLETED", {
-        "job_id": job_id,
-        "lot_no": lot_no,
-        "level": str(level),
-        "block": str(block),
-        "action": action,
-        "method": "API"
-    })
+    # ส่งข้อมูล ShelfComplete ไปยัง Gateway (job มีข้อมูล biz และ shelf_id แล้ว)
+    gateway_success = await send_shelf_complete_to_gateway(job)
     
+    print(f"📋 Job {job_id} completed - Biz: {biz}, Shelf: {shelf_id}, Lot: {lot_no}, Action: {action}")
+    
+    # Job completion logged locally (Gateway data sent via send_shelf_complete_to_gateway)
+    print(f"✅ Job completed: {job_id} - {lot_no} ({action}) - Gateway: {'✅' if gateway_success else '❌'}")
+    
+    # ลบงานออกจากคิว
     DB["jobs"] = [j for j in DB["jobs"] if j.get("jobId") != job_id]
+    
     # Broadcast shelf_state as lots per cell
     shelf_state = []
     for cell in DB["shelf_state"]:
@@ -646,7 +668,10 @@ async def complete_job(job_id: str):
             "completedJobId": job_id,
             "shelf_state": shelf_state,
             "lot_no": lot_no,
-            "action": action
+            "biz": biz,
+            "shelf_id": shelf_id,
+            "action": action,
+            "gateway_success": gateway_success
         }
     }))
     return {
@@ -655,21 +680,6 @@ async def complete_job(job_id: str):
         "action": action,
         "location": f"L{level}B{block}"
     }
-
-# เพิ่ม endpoint ใหม่สำหรับรับข้อมูลจาก JavaScript
-@router.post("/command/complete", tags=["Jobs"])
-async def complete_job_by_data(request_data: dict):
-    """Complete job โดยใช้ข้อมูลที่ส่งมาจาก client"""
-    job_id = request_data.get("job_id")
-    lot_no = request_data.get("lot_no")
-    
-    print(f"API: Received 'Task Complete' via new endpoint for job {job_id}, lot {lot_no}")
-    
-    if not job_id:
-        return {"status": "error", "message": "job_id is required"}
-    
-    # เรียกใช้ฟังก์ชันเดิม
-    return await complete_job(job_id)
 
 @router.post("/command/{job_id}/error", tags=["Jobs"])
 async def error_job(job_id: str, body: ErrorRequest):
@@ -681,15 +691,8 @@ async def error_job(job_id: str, body: ErrorRequest):
     job["error"] = True
     job["errorLocation"] = body.errorLocation
     
-    # 📝 Log job error to Gateway
-    await log_to_gateway("JOB_ERROR", {
-        "job_id": job_id,
-        "lot_no": job["lot_no"],
-        "level": job["level"],
-        "block": job["block"],
-        "error_type": "JOB_ERROR",
-        "error_message": f"Error at {body.errorLocation}"
-    })
+    # Job error logged locally only
+    print(f"❌ Job error: {job_id} - {job['lot_no']} at {body.errorLocation}")
     
     await manager.broadcast(json.dumps({"type": "job_error", "payload": job}))
     return {"status": "success"}
@@ -760,9 +763,9 @@ def get_shelf_summary():
 async def get_shelf_info_endpoint():
     """
     Endpoint สำหรับดึงข้อมูล shelf name จาก Gateway API
+    และเก็บข้อมูลไว้ใน global variable
     """
     try:
-
         local_ip = get_actual_local_ip()
         print(f"🌐 Local IP: {local_ip}")
         
@@ -782,6 +785,14 @@ async def get_shelf_info_endpoint():
             if response.status_code == 200:
                 data = response.json()
                 print(f"✅ Gateway Response: {data}")
+                
+                # เก็บข้อมูลใน global variable
+                GLOBAL_SHELF_INFO["shelf_id"] = data.get("shelf_id")
+                GLOBAL_SHELF_INFO["shelf_name"] = data.get("shelf_name")
+                GLOBAL_SHELF_INFO["local_ip"] = local_ip
+                
+                print(f"💾 Stored global shelf info: {GLOBAL_SHELF_INFO}")
+                
                 return {
                     "success": True,
                     "shelf_id": data.get("shelf_id"),
@@ -790,6 +801,7 @@ async def get_shelf_info_endpoint():
                 }
             else:
                 print(f"❌ Gateway Error: {response.status_code}")
+                # ใช้ค่า fallback แต่ไม่เก็บใน global
                 return {
                     "success": False,
                     "error": f"Gateway returned {response.status_code}",
