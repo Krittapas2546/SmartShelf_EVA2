@@ -19,7 +19,7 @@ from core.lms_config import LMS_BASE_URL, LMS_ENDPOINT, LMS_API_KEY, LMS_TIMEOUT
 from api.websockets import manager # <-- impor        },
 
 # Gateway Configuration  
-GATEWAY_BASE_URL = "http://127.0.0.1:5001"  # Gateway server URL (port 5001)
+GATEWAY_BASE_URL = "http://43.72.20.238:8000"  # Gateway server URL
 
 def get_actual_local_ip():
     """ดึง local IP address ที่แท้จริง (ไม่ใช่ 127.0.0.1)"""
@@ -341,72 +341,6 @@ def serve_simulator(request: Request):
 @router.get("/health", tags=["System"])
 def health_check():
     return {"status": "ok", "message": "Barcode Smart Shelf Server is running"}
-
-# 📊 NEW: Shelf Log API Endpoints
-@router.get("/api/shelf/logs", tags=["Logging"])
-async def get_shelf_logs(limit: int = 20, event_type: str = None):
-    """ดึง shelf logs ล่าสุด"""
-    try:
-        logs_data = await get_logs_from_gateway(limit=limit, event_type=event_type)
-        if "error" in logs_data:
-            return JSONResponse(status_code=500, content={
-                "status": "error", 
-                "message": f"Gateway error: {logs_data['error']}"
-            })
-        return {"status": "success", "logs": logs_data.get("logs", []), "count": len(logs_data.get("logs", []))}
-    except Exception as e:
-        return JSONResponse(status_code=500, content={
-            "status": "error", 
-            "message": f"Failed to get logs: {str(e)}"
-        })
-
-@router.get("/api/shelf/logs/stats", tags=["Logging"])
-async def get_shelf_log_stats():
-    """ดึงสถิติ shelf logs จาก Gateway"""
-    try:
-        # Gateway ยังไม่มี stats endpoint - ให้ส่ง placeholder
-        return {"status": "success", "stats": {"message": "Stats available from Gateway dashboard"}}
-    except Exception as e:
-        return JSONResponse(status_code=500, content={
-            "status": "error", 
-            "message": f"Failed to get stats: {str(e)}"
-        })
-
-@router.get("/api/shelf/logs/jobs", tags=["Logging"])
-async def get_job_logs(limit: int = 10):
-    """ดึงแค่ job events จาก Gateway"""
-    try:
-        logs_data = await get_logs_from_gateway(limit=limit, event_type="JOB_")
-        if "error" in logs_data:
-            return JSONResponse(status_code=500, content={
-                "status": "error", 
-                "message": f"Gateway error: {logs_data['error']}"
-            })
-        job_logs = [log for log in logs_data.get("logs", []) if log.get('event_type', '').startswith('JOB_')]
-        return {"status": "success", "job_logs": job_logs, "count": len(job_logs)}
-    except Exception as e:
-        return JSONResponse(status_code=500, content={
-            "status": "error", 
-            "message": f"Failed to get job logs: {str(e)}"
-        })
-
-@router.get("/api/shelf/logs/leds", tags=["Logging"])
-async def get_led_logs(limit: int = 10):
-    """ดึงแค่ LED events จาก Gateway"""
-    try:
-        logs_data = await get_logs_from_gateway(limit=limit, event_type="LED_")
-        if "error" in logs_data:
-            return JSONResponse(status_code=500, content={
-                "status": "error", 
-                "message": f"Gateway error: {logs_data['error']}"
-            })
-        led_logs = [log for log in logs_data.get("logs", []) if log.get('event_type', '').startswith('LED_')]
-        return {"status": "success", "led_logs": led_logs, "count": len(led_logs)}
-    except Exception as e:
-        return JSONResponse(status_code=500, content={
-            "status": "error", 
-            "message": f"Failed to get LED logs: {str(e)}"
-        })
 
 @router.post("/api/shelf/askCorrectShelf", tags=["Shelf Operations"])
 async def ask_correct_shelf(request: Request):
@@ -821,3 +755,55 @@ def get_shelf_summary():
         },
         "occupied_details": occupied_list
     }
+
+@router.get("/ShelfName", tags=["Shelf Operations"])
+async def get_shelf_info_endpoint():
+    """
+    Endpoint สำหรับดึงข้อมูล shelf name จาก Gateway API
+    """
+    try:
+
+        local_ip = get_actual_local_ip()
+        print(f"🌐 Local IP: {local_ip}")
+        
+        # เรียก Gateway API
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                'http://43.72.20.238:8000/IoTManagement/shelf/requestID',
+                headers={
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                },
+                json={
+                    "shelf_ip": local_ip  # ใช้ local IP จริง
+                }
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                print(f"✅ Gateway Response: {data}")
+                return {
+                    "success": True,
+                    "shelf_id": data.get("shelf_id"),
+                    "shelf_name": data.get("shelf_name"),
+                    "local_ip": local_ip
+                }
+            else:
+                print(f"❌ Gateway Error: {response.status_code}")
+                return {
+                    "success": False,
+                    "error": f"Gateway returned {response.status_code}",
+                    "shelf_id": "UNKNOWN",
+                    "shelf_name": "Shelf",
+                    "local_ip": local_ip
+                }
+                
+    except Exception as e:
+        print(f"Error calling Gateway: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "shelf_id": "ERROR",  
+            "shelf_name": "Shelf",
+            "local_ip": "unknown"
+        }

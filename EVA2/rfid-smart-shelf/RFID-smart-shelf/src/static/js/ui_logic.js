@@ -1520,7 +1520,10 @@ function getCellCapacity(level, block) {
 
         // --- Initial Load ---
         document.addEventListener('DOMContentLoaded', async () => {
+            console.log('📄 DOM Content Loaded - เริ่มต้นระบบ');
+            
             await loadShelfConfig();
+            await initializeShelfName(); // เพิ่มการดึงข้อมูล shelf name
             initializeShelfState();
             setupWebSocket();
             renderAll();
@@ -2407,3 +2410,45 @@ function getCellCapacity(level, block) {
                 };
             }
         }
+// --- Function สำหรับดึงข้อมูล shelf name จาก Gateway API ---
+async function initializeShelfName() {
+    console.log('🏷️ กำลังดึงข้อมูล shelf name จาก Gateway...');
+    
+    try {
+        const response = await fetch('/ShelfName', {
+            method: 'GET',
+            headers: {
+                'Accept': 'application/json'
+            }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            console.log('📋 ข้อมูล Shelf:', data);
+            
+            if (data.success && data.shelf_name) {
+                // แปลงชื่อเป็นตัวพิมพ์ใหญ่
+                const shelfDisplayName = data.shelf_name.toUpperCase();
+                
+                // อัพเดทชื่อใน UI
+                const shelfTitle = document.getElementById('shelfTitle');
+                if (shelfTitle) {
+                    shelfTitle.textContent = shelfDisplayName;
+                    console.log(`✅ อัพเดทชื่อ Shelf เป็น: ${shelfDisplayName}`);
+                } else {
+                    console.warn('⚠️ ไม่พบ element #shelfTitle');
+                }
+            } else {
+                console.warn('⚠️ ไม่ได้รับ shelf_name จาก Gateway');
+                console.log('📄 Response data:', data);
+            }
+        } else {
+            console.error('❌ Error response:', response.status);
+        }
+    } catch (error) {
+        console.error('💥 เกิดข้อผิดพลาดในการดึงข้อมูล shelf name:', error);
+    }
+}
+
+// ทำให้ function เป็น global เพื่อเรียกจาก console ได้
+window.initializeShelfName = initializeShelfName;

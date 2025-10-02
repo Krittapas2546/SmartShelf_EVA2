@@ -1,9 +1,9 @@
 # SHELF_CONFIG สำหรับ backward compatibility
 SHELF_CONFIG = {
-    1: 8, 
+    1: 6, 
     2: 6, 
     3: 6,
-    4: 1, 
+    4: 6, 
 }
 
 def create_initial_shelf_state():
