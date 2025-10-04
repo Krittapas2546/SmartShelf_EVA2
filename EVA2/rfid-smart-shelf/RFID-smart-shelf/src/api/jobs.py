@@ -11,7 +11,7 @@ from datetime import datetime
 from core.led_controller import set_led
 
 # --- Import จากไฟล์ที่เราสร้างขึ้น ---
-from core.models import JobRequest, ErrorRequest, LEDPositionRequest, LEDPositionsRequest, LMSCheckShelfRequest, LMSCheckShelfResponse, ShelfComplete
+from core.models import JobRequest, ErrorRequest, LEDPositionRequest, LEDPositionsRequest, LEDClearAndBatch, LMSCheckShelfRequest, LMSCheckShelfResponse, ShelfComplete
 from core.database import (
     DB, get_job_by_id, get_lots_in_position, add_lot_to_position, remove_lot_from_position, update_lot_quantity, validate_position, get_shelf_info, SHELF_CONFIG
 )
@@ -333,6 +333,100 @@ async def clear_leds():
         return {"ok": True}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": "LED clear failed", "detail": str(e)})
+
+@router.post("/api/led/clear-and-batch", tags=["LED Control"])
+async def control_led_clear_and_batch(request: LEDClearAndBatch):
+    """
+    ควบคุม LED แบบ clear และ batch พร้อมกัน เพื่อป้องกันการกระพริบ
+    รองรับการ clear ก่อน (ถ้า clear_first=True) แล้วจึง set LED หลายตำแหน่งพร้อมกัน
+    """
+    try:
+        led_commands = []
+        invalid_positions = []
+        
+        # Parse และ validate ทุก position ก่อน
+        import re
+        for pos_data in request.positions:
+            position = pos_data.position.upper().strip()
+            r = pos_data.r
+            g = pos_data.g
+            b = pos_data.b
+            
+            # Parse position string
+            match = re.match(r'^L(\d+)B(\d+)$', position)
+            if not match:
+                invalid_positions.append(f"{position}: Invalid format")
+                continue
+                
+            level = int(match.group(1))
+            block = int(match.group(2))
+            
+            # Validate position exists in shelf config
+            if not validate_position(level, block):
+                invalid_positions.append(f"{position}: Not in shelf config")
+                continue
+                
+            led_commands.append({
+                "level": level,
+                "block": block, 
+                "r": r,
+                "g": g,
+                "b": b,
+                "position": position,
+                "hex_color": f"#{r:02x}{g:02x}{b:02x}"
+            })
+        
+        if invalid_positions:
+            return JSONResponse(status_code=400, content={
+                "error": "Invalid positions found",
+                "invalid_positions": invalid_positions,
+                "valid_count": len(led_commands)
+            })
+        
+        if not led_commands:
+            return JSONResponse(status_code=400, content={
+                "error": "No valid positions provided"
+            })
+        
+        # Clear LEDs ก่อนถ้า clear_first=True
+        if request.clear_first:
+            from core.led_controller import clear_all_leds
+            clear_all_leds()
+            print(f"💡 LEDs cleared before batch operation")
+            
+            # เพิ่ม delay เล็กน้อยถ้าต้องการ
+            if request.delay_ms > 0:
+                import asyncio
+                await asyncio.sleep(request.delay_ms / 1000.0)
+        
+        # Execute LED batch commands
+        from core.led_controller import set_led_batch
+        set_led_batch(led_commands)
+        
+        print(f"💡 LED Clear & Batch: {len(led_commands)} positions controlled")
+        for cmd in led_commands:
+            print(f"   {cmd['position']} = {cmd['hex_color']}")
+        
+        return {
+            "ok": True,
+            "cleared_first": request.clear_first,
+            "delay_ms": request.delay_ms if request.clear_first else 0,
+            "count": len(led_commands),
+            "positions": [cmd["position"] for cmd in led_commands],
+            "colors": [
+                {
+                    "position": cmd["position"], 
+                    "rgb": {"r": cmd["r"], "g": cmd["g"], "b": cmd["b"]},
+                    "hex": cmd["hex_color"]
+                } for cmd in led_commands
+            ]
+        }
+        
+    except Exception as e:
+        return JSONResponse(status_code=400, content={
+            "error": "Invalid request",
+            "detail": str(e)
+        })
     
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
 def serve_shelf_ui(request: Request):

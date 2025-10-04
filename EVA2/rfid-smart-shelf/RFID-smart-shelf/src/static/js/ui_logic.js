@@ -48,7 +48,7 @@ function renderCellPreview({ level, block, lots, targetLotNo, isPlaceJob = false
             if (isNewLot) itemClass += ' new-lot';
 
             html += `<div class="${itemClass}" style="height: ${height}px;" title="${lot.lot_no} - ${trayCount} trays">`;
-            html += `<span class="lot-name">${displayName}</span>`;
+            html += `<span class="lot-name ${isTarget ? 'lot-name-large' : ''}">${displayName}</span>`;
             if (isNewLot) {
                 html += `<span class="new-badge"> NEW</span>`;
             }
@@ -1488,7 +1488,7 @@ function getCellCapacity(level, block) {
                 mainView.style.display = 'none';
                 queueSelectionView.style.display = 'block';
                 renderQueueSelectionView(queue);
-                controlLEDByQueue();
+                // controlLEDByQueue(); ปิดการควบคุม LED ในหน้า Queue
             } else if (activeJob) {
                 // แสดงหน้า Active Job
                 console.log('🎯 Rendering Active Job view');
