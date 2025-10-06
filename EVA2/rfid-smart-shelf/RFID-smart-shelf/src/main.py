@@ -42,6 +42,11 @@ async def startup_event():
     """เรียกใช้ฟังก์ชัน initialization เมื่อแอปพลิเคชันเริ่มต้น"""
     # รอสักครู่ให้เซิร์ฟเวอร์เริ่มต้นเสร็จก่อน
     await asyncio.sleep(2)
+    
+    # Migration: เพิ่ม biz field ให้กับ lots ที่มีอยู่แล้ว
+    from core.database import migrate_existing_lots_add_biz
+    migrate_existing_lots_add_biz()
+    
     await initialize_shelf_info()
 
 

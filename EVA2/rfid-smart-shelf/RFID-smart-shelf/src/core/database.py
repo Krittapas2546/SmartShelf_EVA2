@@ -41,7 +41,7 @@ def get_lots_in_position(level: int, block: int):
         return cell[2]
     return []
 
-def add_lot_to_position(level: int, block: int, lot_no: str, tray_count: int):
+def add_lot_to_position(level: int, block: int, lot_no: str, tray_count: int, biz: str = "Unknown"):
     cell = get_cell(level, block)
     if not cell:
         return False
@@ -53,9 +53,12 @@ def add_lot_to_position(level: int, block: int, lot_no: str, tray_count: int):
     for lot in lots:
         if lot['lot_no'] == lot_no:
             lot['tray_count'] += tray_count
+            # อัปเดต biz ถ้าไม่มีหรือเป็น Unknown
+            if 'biz' not in lot or lot['biz'] == "Unknown":
+                lot['biz'] = biz
             return True
     # ถ้าไม่มี lot_no เดิม ให้เพิ่มใหม่ (วางบนสุด: append)
-    lots.append({"lot_no": lot_no, "tray_count": tray_count})
+    lots.append({"lot_no": lot_no, "tray_count": tray_count, "biz": biz})
     return True
 
 def remove_lot_from_position(level: int, block: int, lot_no: str):
@@ -98,6 +101,28 @@ def get_lot_in_position(level: int, block: int):
 def validate_position(level: int, block: int):
     """ตรวจสอบว่าตำแหน่งที่กำหนดมีอยู่จริงในชั้นวางหรือไม่"""
     return level in SHELF_CONFIG and 1 <= block <= SHELF_CONFIG[level]
+
+def update_lot_biz(lot_no: str, biz: str):
+    """อัปเดต biz ของ lot_no ทุกตำแหน่งที่พบ"""
+    updated_count = 0
+    for cell in DB["shelf_state"]:
+        for lot in cell[2]:
+            if lot['lot_no'] == lot_no:
+                lot['biz'] = biz
+                updated_count += 1
+    return updated_count
+
+def migrate_existing_lots_add_biz():
+    """เพิ่ม biz field ให้กับ lots ที่มีอยู่แล้วโดยไม่มี biz"""
+    updated_count = 0
+    for cell in DB["shelf_state"]:
+        for lot in cell[2]:
+            if 'biz' not in lot:
+                lot['biz'] = "Unknown"
+                updated_count += 1
+    if updated_count > 0:
+        print(f"🔄 Migrated {updated_count} existing lots to include biz field")
+    return updated_count
 
 def get_shelf_info():
     """ส่งคืนข้อมูลการกำหนดค่าของชั้นวาง"""

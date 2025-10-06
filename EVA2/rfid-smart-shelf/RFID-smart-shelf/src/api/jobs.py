@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse , JSONResponse
 from fastapi.templating import Jinja2Templates
+
 import json
 import pathlib
 import httpx
@@ -13,7 +14,7 @@ from core.led_controller import set_led
 # --- Import จากไฟล์ที่เราสร้างขึ้น ---
 from core.models import JobRequest, ErrorRequest, LEDPositionRequest, LEDPositionsRequest, LEDClearAndBatch, LMSCheckShelfRequest, LMSCheckShelfResponse, ShelfComplete
 from core.database import (
-    DB, get_job_by_id, get_lots_in_position, add_lot_to_position, remove_lot_from_position, update_lot_quantity, validate_position, get_shelf_info, SHELF_CONFIG
+    DB, get_job_by_id, get_lots_in_position, add_lot_to_position, remove_lot_from_position, update_lot_quantity, validate_position, get_shelf_info, SHELF_CONFIG, update_lot_biz
 )
 from core.lms_config import LMS_BASE_URL, LMS_ENDPOINT, LMS_API_KEY, LMS_TIMEOUT
 from api.websockets import manager # <-- impor        },
@@ -92,6 +93,7 @@ async def send_shelf_complete_to_gateway(job: dict):
             
         # สร้างข้อมูล ShelfComplete ตาม Gateway API format
         shelf_complete_data = {
+            "job_id": job.get("jobId"),  # ใช้ jobId ของ local system
             "biz": job["biz"],  # บังคับต้องมี
             "shelf_id": job.get("shelf_id", "UNKNOWN"),
             "lot_no": job["lot_no"],
@@ -138,8 +140,6 @@ templates = Jinja2Templates(directory=str(pathlib.Path(__file__).parent.parent /
 # --- Routes ---
 
 # --- LED Control Endpoint ---
-from fastapi import Request
-from fastapi.responses import JSONResponse
 
 # ลบ endpoint ที่ซ้ำกัน - ใช้แค่อันด้านล่างที่ tags=["Jobs"]
 # @router.get("/api/shelf/config", tags=["System"])
@@ -732,8 +732,8 @@ async def complete_job(job_id: str):
     shelf_id = job.get("shelf_id", "UNKNOWN")
     
     if job["place_flg"] == "1":
-        # วางของ: เพิ่ม lot เข้า cell
-        add_lot_to_position(level, block, lot_no, tray_count)
+        # วางของ: เพิ่ม lot เข้า cell พร้อม biz
+        add_lot_to_position(level, block, lot_no, tray_count, biz)
         action = "placed"
     else:
         # หยิบของ: ลบ lot ออกจาก cell
@@ -852,6 +852,237 @@ def get_shelf_summary():
         },
         "occupied_details": occupied_list
     }
+
+@router.get("/api/shelf/pending", tags=["Shelf Operations"])
+async def get_pending_jobs_from_gateway():
+    """
+    ดึงงานที่ค้างอยู่จาก Gateway API สำหรับการกู้คืนหลังไฟดับ
+    Flow: Smart Shelf → Gateway → Response with pending jobs
+    """
+    try:
+        # ขั้นตอนที่ 1: ตรวจสอบ shelf_id จาก global หรือดึงใหม่
+        shelf_id = GLOBAL_SHELF_INFO.get("shelf_id")
+        
+        if not shelf_id:
+            print("🔄 No shelf_id in global, fetching from Gateway...")
+            
+            # ดึง shelf_id จาก Gateway ก่อน
+            local_ip = get_actual_local_ip()
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    'http://43.72.20.238:8000/IoTManagement/shelf/requestID',
+                    headers={
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                    },
+                    json={"shelf_ip": local_ip}
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    shelf_id = data.get("shelf_id")
+                    
+                    # อัพเดท global
+                    GLOBAL_SHELF_INFO["shelf_id"] = shelf_id
+                    GLOBAL_SHELF_INFO["shelf_name"] = data.get("shelf_name")
+                    GLOBAL_SHELF_INFO["local_ip"] = local_ip
+                    
+                    print(f"✅ Got shelf_id: {shelf_id}")
+                else:
+                    return JSONResponse(
+                        status_code=502,
+                        content={
+                            "error": "Cannot get shelf_id from Gateway",
+                            "status": "gateway_error",
+                            "message": f"Gateway returned {response.status_code}"
+                        }
+                    )
+        
+        # ขั้นตอนที่ 2: ดึงงานที่ค้างอยู่จาก Gateway
+        pending_url = f"{GATEWAY_BASE_URL}/IoTManagement/shelf/pending/{shelf_id}"
+        print(f"🔄 Fetching pending jobs from: {pending_url}")
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                pending_url,
+                headers={'Accept': 'application/json'}
+            )
+            
+            if response.status_code == 200:
+                pending_data = response.json()
+                print(f"📦 Gateway pending response: {pending_data}")
+                
+                if pending_data.get("status") == "success" and "data" in pending_data:
+                    jobs_data = pending_data["data"]
+                    
+                    # แปลงข้อมูลเป็น format ที่ใช้ใน Smart Shelf
+                    converted_jobs = []
+                    for gateway_job in jobs_data:
+                        # สร้าง jobId ใหม่ด้วย job_counter ของ local
+                        DB["job_counter"] += 1
+                        local_job_id = f"job_{DB['job_counter']}"
+                        
+                        converted_job = {
+                            "jobId": local_job_id,  # ใช้ local job_counter สร้าง jobId ใหม่
+                            "lot_no": gateway_job.get("lot_no"),
+                            "level": gateway_job.get("level"),
+                            "block": gateway_job.get("block"),
+                            "place_flg": gateway_job.get("place_flg"),
+                            "tray_count": gateway_job.get("tray_count"),
+                            "status": gateway_job.get("status"),
+                            "biz": gateway_job.get("biz", "Unknown"),
+                            "shelf_id": shelf_id,
+                            "create_date": gateway_job.get("create_date"),
+                            "source": "gateway_recovery",
+                            "gateway_job_id": gateway_job.get("job_id")  # เก็บ original job_id ไว้สำหรับส่งกลับ Gateway
+                        }
+                        converted_jobs.append(converted_job)
+                    
+                    print(f"✅ Converted {len(converted_jobs)} pending jobs")
+                    
+                    return {
+                        "status": "success",
+                        "shelf_id": shelf_id,
+                        "total_pending": len(converted_jobs),
+                        "jobs": converted_jobs,
+                        "message": f"Found {len(converted_jobs)} pending jobs for shelf {shelf_id}"
+                    }
+                else:
+                    return {
+                        "status": "success",
+                        "shelf_id": shelf_id,
+                        "total_pending": 0,
+                        "jobs": [],
+                        "message": f"No pending jobs found for shelf {shelf_id}"
+                    }
+            else:
+                return JSONResponse(
+                    status_code=502,
+                    content={
+                        "error": "Gateway pending jobs request failed",
+                        "status": "gateway_error",
+                        "message": f"Gateway returned {response.status_code}",
+                        "detail": response.text
+                    }
+                )
+                
+    except httpx.TimeoutException:
+        return JSONResponse(
+            status_code=504,
+            content={
+                "error": "Gateway timeout",
+                "status": "timeout",
+                "message": "Connection to Gateway timed out"
+            }
+        )
+    except httpx.ConnectError:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "Gateway unavailable",
+                "status": "connection_error",
+                "message": "Cannot connect to Gateway server"
+            }
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Internal server error",
+                "status": "server_error",
+                "message": str(e)
+            }
+        )
+
+@router.post("/api/shelf/pending/load", tags=["Shelf Operations"])
+async def load_pending_jobs_into_queue():
+    """
+    ดึงงานที่ค้างอยู่จาก Gateway และเพิ่มเข้า local job queue
+    ใช้สำหรับการกู้คืนงานหลังจากไฟดับหรือรีสตาร์ทระบบ
+    """
+    try:
+        # เรียกใช้ฟังก์ชันดึงงานที่ค้างอยู่
+        pending_response = await get_pending_jobs_from_gateway()
+        
+        # ตรวจสอบว่าได้ response ที่ถูกต้องหรือไม่
+        if isinstance(pending_response, JSONResponse):
+            # ถ้าเป็น error response ให้ return เลย
+            return pending_response
+        
+        if pending_response.get("status") != "success":
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "Failed to get pending jobs",
+                    "message": pending_response.get("message", "Unknown error")
+                }
+            )
+        
+        pending_jobs = pending_response.get("jobs", [])
+        
+        if not pending_jobs:
+            return {
+                "status": "success",
+                "message": "No pending jobs to load",
+                "loaded_count": 0,
+                "skipped_count": 0,
+                "total_queue_size": len(DB["jobs"])
+            }
+        
+        # เพิ่มงานเข้า local queue (ข้ามงานซ้ำ)
+        loaded_count = 0
+        skipped_count = 0
+        
+        for pending_job in pending_jobs:
+            # ตรวจสอบงานซ้ำ (lot_no, level, block) เท่านั้น ไม่สนใจ gateway_job_id
+            job_exists = any(
+                job["lot_no"] == pending_job["lot_no"] and
+                job["level"] == pending_job["level"] and
+                job["block"] == pending_job["block"]
+                for job in DB["jobs"]
+            )
+            
+            if not job_exists:
+                # เพิ่มงานใหม่เข้า queue
+                DB["jobs"].append(pending_job)
+                loaded_count += 1
+                print(f"✅ Loaded pending job: {pending_job['jobId']} - {pending_job['lot_no']} (L{pending_job['level']}B{pending_job['block']})")
+            else:
+                skipped_count += 1
+                print(f"⚠️ Skipped duplicate job: {pending_job['jobId']} - {pending_job['lot_no']} (L{pending_job['level']}B{pending_job['block']})")
+        
+        # Broadcast ไปยัง WebSocket clients
+        if loaded_count > 0:
+            for job in pending_jobs[-loaded_count:]:  # ส่งเฉพาะงานที่เพิ่มจริง
+                if not any(
+                    existing_job["lot_no"] == job["lot_no"] and
+                    existing_job["level"] == job["level"] and
+                    existing_job["block"] == job["block"]
+                    for existing_job in DB["jobs"][:-loaded_count]  # ไม่นับงานที่เพิ่มใหม่
+                ):
+                    await manager.broadcast(json.dumps({
+                        "type": "new_job", 
+                        "payload": job
+                    }))
+        
+        return {
+            "status": "success",
+            "message": f"Successfully loaded {loaded_count} pending jobs into queue",
+            "loaded_count": loaded_count,
+            "skipped_count": skipped_count,
+            "total_pending": len(pending_jobs),
+            "total_queue_size": len(DB["jobs"])
+        }
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Failed to load pending jobs",
+                "status": "server_error",
+                "message": str(e)
+            }
+        )
 
 @router.get("/ShelfName", tags=["Shelf Operations"])
 async def get_shelf_info_endpoint():

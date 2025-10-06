@@ -141,6 +141,7 @@ function getCellCapacity(level, block) {
         let SHELF_CONFIG = {};
         let TOTAL_LEVELS = 0;
         let MAX_BLOCKS = 0;
+        let shelf_id = null; // เพิ่มตัวแปรสำหรับเก็บ shelf_id
 
         // ฟังก์ชันสำหรับ Force Refresh Shelf Grid Structure
         function refreshShelfGrid() {
@@ -935,25 +936,15 @@ function getCellCapacity(level, block) {
                 stopAutoReturnTimer();
                 stopActivityDetection();
                 
-                // เพิ่ม UUID และ timestamp สำหรับการติดตาม
-                const jobWithMeta = {
-                    ...selectedJob,
-                    selectedAt: new Date().toISOString(),
-                    uuid: crypto.randomUUID ? crypto.randomUUID() : 'uuid-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9)
-                };
-                
-                console.log(`🔍 Job metadata added - UUID: ${jobWithMeta.uuid}, Selected at: ${jobWithMeta.selectedAt}`);
-                
                 // ลบ job ที่เลือกออกจาก queue
                 const updatedQueue = queue.filter(job => job.jobId !== jobId);
                 localStorage.setItem(QUEUE_KEY, JSON.stringify(updatedQueue));
                 
-                // ตั้งเป็น active job พร้อม metadata
-                setActiveJob(jobWithMeta);
+                // ตั้งเป็น active job
+                setActiveJob(selectedJob);
                 renderAll();
                 
                 console.log(`✅ Job ${selectedJob.lot_no} activated. Remaining queue size: ${updatedQueue.length}`);
-                console.log(`📌 Active job stored with UUID: ${jobWithMeta.uuid}`);
             } else {
                 console.error('❌ Job not found:', jobId);
             }
@@ -1385,11 +1376,10 @@ function getCellCapacity(level, block) {
             }
 
             console.log('🚀 Completing job:', activeJob.jobId, 'Lot:', activeJob.lot_no);
-            console.log(`📝 Job metadata:`, {
-                uuid: activeJob.uuid || 'N/A',
-                selectedAt: activeJob.selectedAt || 'N/A',
+            console.log(`📝 Job details:`, {
                 level: activeJob.level,
-                block: activeJob.block
+                block: activeJob.block,
+                place_flg: activeJob.place_flg
             });
 
             // Clear loggedCells so next render logs new state
@@ -1404,7 +1394,6 @@ function getCellCapacity(level, block) {
                         lot_no: activeJob.lot_no,
                         level: activeJob.level,
                         block: activeJob.block,
-                        uuid: activeJob.uuid || null,
                         completedAt: new Date().toISOString()
                     }
                 };
@@ -1518,11 +1507,48 @@ function getCellCapacity(level, block) {
         document.addEventListener('DOMContentLoaded', async () => {
             console.log('📄 DOM Content Loaded - เริ่มต้นระบบ');
             
-            await loadShelfConfig();
-            await initializeShelfName(); // เพิ่มการดึงข้อมูล shelf name
-            initializeShelfState();
-            setupWebSocket();
-            renderAll();
+            try {
+                console.log('⏳ Loading shelf config...');
+                await loadShelfConfig();
+                console.log('✅ Shelf config loaded');
+                
+                console.log('⏳ Initializing shelf name...');
+                await initializeShelfName(); // เพิ่มการดึงข้อมูล shelf name
+                console.log('✅ Shelf name initialized');
+                
+                // 🔄 เพิ่มการดึงงานที่ค้างอยู่จาก Gateway หลังจากได้ shelf_id แล้ว
+                console.log('🔄 เริ่มดึงงานที่ค้างอยู่จาก Gateway...');
+                try {
+                    const pendingResult = await loadPendingJobsFromGateway();
+                    if (pendingResult && pendingResult.success) {
+                        console.log(`✅ การดึงงานที่ค้างอยู่เสร็จสิ้น: เพิ่ม ${pendingResult.added}/${pendingResult.total} งาน`);
+                        if (pendingResult.skipped > 0) {
+                            console.log(`⚠️ ข้ามงานซ้ำ: ${pendingResult.skipped} งาน`);
+                        }
+                    } else {
+                        console.log(`⚠️ การดึงงานที่ค้างอยู่ล้มเหลว: ${pendingResult?.error || 'Unknown error'}`);
+                    }
+                } catch (pendingError) {
+                    console.error('💥 ข้อผิดพลาดในการดึงงานที่ค้างอยู่:', pendingError);
+                    showNotification('❌ ไม่สามารถดึงงานที่ค้างอยู่ได้', 'error');
+                }
+                
+                console.log('⏳ Initializing shelf state...');
+                initializeShelfState();
+                console.log('✅ Shelf state initialized');
+                
+                console.log('⏳ Setting up WebSocket...');
+                setupWebSocket();
+                console.log('✅ WebSocket setup completed');
+                
+                console.log('⏳ Rendering all components...');
+                renderAll();
+                console.log('✅ Initial setup completed successfully');
+                
+            } catch (error) {
+                console.error('💥 ข้อผิดพลาดในการเริ่มต้นระบบ:', error);
+                showNotification('❌ เกิดข้อผิดพลาดในการเริ่มต้นระบบ', 'error');
+            }
         });
         
         // ลบ Event Listener ของ 'storage' เก่าออก เพราะเราจะใช้ WebSocket แทน
@@ -1579,28 +1605,8 @@ function getCellCapacity(level, block) {
                         case "job_completed":
                             console.log('📦 Received job_completed message:', data.payload);
                             
-                            // ตรวจสอบว่า job ที่เสร็จสิ้นตรงกับ active job ปัจจุบันหรือไม่
-                            const currentActiveJob = getActiveJob();
-                            if (currentActiveJob && currentActiveJob.jobId !== data.payload.completedJobId) {
-                                console.warn(`⚠️ Job ID mismatch! Current active: ${currentActiveJob.jobId}, Completed: ${data.payload.completedJobId}`);
-                                console.warn(`⚠️ Current active lot: ${currentActiveJob.lot_no}, Completed lot: ${data.payload.lot_no}`);
-                                console.warn(`🔍 UUID check - Active UUID: ${currentActiveJob.uuid || 'N/A'}, Completed UUID: ${data.payload.uuid || 'N/A'}`);
-                                
-                                // ตรวจสอบ UUID ถ้ามี
-                                if (currentActiveJob.uuid && data.payload.uuid && currentActiveJob.uuid !== data.payload.uuid) {
-                                    console.error(`❌ UUID mismatch detected! This is a different job completion.`);
-                                }
-                                
-                                // ถ้าไม่ตรงกัน อาจเป็นการ complete job อื่นที่ไม่ใช่ active job
-                                // แค่อัปเดต queue และ shelf state โดยไม่ลบ active job
-                                let currentQueue = getQueue();
-                                currentQueue = currentQueue.filter(j => j.jobId !== data.payload.completedJobId);
-                                localStorage.setItem(QUEUE_KEY, JSON.stringify(currentQueue));
-                                localStorage.setItem(GLOBAL_SHELF_STATE_KEY, JSON.stringify(data.payload.shelf_state));
-                                renderAll();
-                                showNotification(`⚠️ Job ${data.payload.lot_no} completed by another process!`, 'warning');
-                                return; // ไม่ลบ active job
-                            }
+                            // รับข้อมูลจาก Gateway แต่ไม่ต้องเช็ค job ID ให้ตรงกัน
+                            // เพียงแค่ลบ active job และอัปเดต shelf state ตามข้อมูลที่ได้รับ
                             
                             let currentQueue = getQueue();
                             console.log(`📋 Queue before removal (size: ${currentQueue.length}):`, currentQueue.map(j => `${j.lot_no}(${j.jobId})`));
@@ -2408,7 +2414,7 @@ function getCellCapacity(level, block) {
         }
 // --- Function สำหรับดึงข้อมูล shelf name จาก Gateway API ---
 async function initializeShelfName() {
-    console.log('🏷️ กำลังดึงข้อมูล shelf name จาก Gateway...');
+    console.log('🏷️ กำลังดึงข้อมูล shelf name และ shelf_id จาก Gateway...');
     
     try {
         const response = await fetch('/ShelfName', {
@@ -2421,6 +2427,14 @@ async function initializeShelfName() {
         if (response.ok) {
             const data = await response.json();
             console.log('📋 ข้อมูล Shelf:', data);
+            
+            // เก็บ shelf_id ใน global variable
+            if (data.shelf_id) {
+                shelf_id = data.shelf_id;
+                console.log(`💾 เก็บ shelf_id: ${shelf_id}`);
+            } else {
+                console.warn('⚠️ ไม่ได้รับ shelf_id จาก Gateway');
+            }
             
             if (data.success && data.shelf_name) {
                 // แปลงชื่อเป็นตัวพิมพ์ใหญ่
@@ -2448,3 +2462,79 @@ async function initializeShelfName() {
 
 // ทำให้ function เป็น global เพื่อเรียกจาก console ได้
 window.initializeShelfName = initializeShelfName;
+
+// --- Function สำหรับดึงงานที่ค้างอยู่จาก Gateway (ใช้ API endpoint ใหม่) ---
+async function loadPendingJobsFromGateway() {
+    console.log('🔄 กำลังดึงงานที่ค้างอยู่จาก Gateway ผ่าน API...');
+    console.log('📍 Current shelf_id:', shelf_id);
+    console.log('📍 Function called at:', new Date().toISOString());
+    
+    if (!shelf_id) {
+        console.warn('⚠️ ไม่มี shelf_id สำหรับดึงงาน');
+        return { success: false, error: 'No shelf_id available' };
+    }
+    
+    try {
+        console.log('📤 ส่งคำขอไปยัง: POST /api/shelf/pending/load');
+        
+        // เรียก API endpoint ใหม่ที่จัดการทุกอย่างให้
+        const response = await fetch('/api/shelf/pending/load', {
+            method: 'POST',
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        console.log('📥 ได้รับ response:', response.status, response.statusText);
+        
+        if (!response.ok) {
+            throw new Error(`API request failed: ${response.status}`);
+        }
+        
+        const result = await response.json();
+        console.log('📦 API Response:', result);
+        
+        if (result.status === 'success') {
+            const loadedCount = result.loaded_count || 0;
+            const skippedCount = result.skipped_count || 0;
+            const totalPending = result.total_pending || 0;
+            
+            if (loadedCount > 0) {
+                console.log(`🎯 เพิ่มงานที่ค้างอยู่ ${loadedCount} งาน เข้าสู่ queue`);
+                console.log(`⚠️ ข้ามงานซ้ำ ${skippedCount} งาน`);
+                
+                // แสดง notification
+                showNotification(
+                    `🔄 กู้คืนงานที่ค้างอยู่ ${loadedCount} งานจาก Gateway สำเร็จ${skippedCount > 0 ? ` (ข้ามงานซ้ำ ${skippedCount} งาน)` : ''}`,
+                    'success'
+                );
+                
+                // รีเฟรช UI (เนื่องจาก API ส่ง WebSocket broadcast แล้ว)
+                renderAll();
+                
+                return { success: true, added: loadedCount, skipped: skippedCount, total: totalPending };
+            } else {
+                console.log('ℹ️ ไม่มีงานใหม่ที่ต้องเพิ่ม');
+                if (totalPending > 0) {
+                    console.log(`ℹ️ งานทั้งหมด ${totalPending} งานมีอยู่ใน queue แล้ว`);
+                }
+                return { success: true, added: 0, skipped: skippedCount, total: totalPending };
+            }
+        } else {
+            throw new Error(result.message || 'Unknown API error');
+        }
+        
+    } catch (error) {
+        console.error('💥 เกิดข้อผิดพลาดในการดึงงานที่ค้างอยู่:', error);
+        showNotification(
+            `❌ ไม่สามารถดึงงานที่ค้างอยู่จาก Gateway ได้: ${error.message}`,
+            'error'
+        );
+        
+        return { success: false, error: error.message };
+    }
+}
+
+// ทำให้ function เป็น global เพื่อเรียกจาก console ได้
+window.loadPendingJobsFromGateway = loadPendingJobsFromGateway;
