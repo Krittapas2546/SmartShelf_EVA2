@@ -1058,6 +1058,204 @@ function getCellCapacity(level, block) {
         }
 
         /**
+         * แสดง popup ยืนยันการเปลี่ยน job
+         */
+        function showJobConfirmationPopup(currentJob, newJob, scannedLot) {
+            const overlay = document.createElement('div');
+            overlay.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(0, 0, 0, 0.6);
+                z-index: 10000;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                animation: fadeIn 0.3s ease-in-out;
+            `;
+
+            const popup = document.createElement('div');
+            popup.style.cssText = `
+                background: linear-gradient(135deg, #17a2b8, #3498db);
+                border: none;
+                border-radius: 20px;
+                padding: 40px;
+                max-width: 650px;
+                width: 90%;
+                text-align: center;
+                box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                animation: slideIn 0.4s ease-in-out;
+                position: relative;
+                overflow: hidden;
+            `;
+
+            popup.innerHTML = `
+                <div style="font-size: 48px; margin-bottom: 20px;">⚠️</div>
+                <div style="font-size: 28px; font-weight: bold; color: white; margin-bottom: 15px; text-shadow: 2px 2px 4px rgba(0,0,0,0.3);">
+                    Job Confirmation Required
+                </div>
+                <div style="font-size: 20px; color: white; margin-bottom: 25px; text-shadow: 1px 1px 2px rgba(0,0,0,0.3);">
+                    Current job: <strong>${currentJob.lot_no}</strong><br>
+                    Scanned lot: <strong>${scannedLot}</strong>
+                </div>
+                <div style="font-size: 18px; color: white; margin-bottom: 30px; text-shadow: 1px 1px 2px rgba(0,0,0,0.3);">
+                    Is job <strong>${currentJob.lot_no}</strong> completed?
+                </div>
+                <div style="display: flex; gap: 20px; justify-content: center; margin-top: 30px;">
+                    <button id="confirmYes" style="
+                        padding: 15px 30px;
+                        font-size: 18px;
+                        font-weight: bold;
+                        background: #28a745;
+                        color: white;
+                        border: none;
+                        border-radius: 10px;
+                        cursor: pointer;
+                        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+                        transition: all 0.2s;
+                    ">✅ Yes, Complete</button>
+                    <button id="confirmNo" style="
+                        padding: 15px 30px;
+                        font-size: 18px;
+                        font-weight: bold;
+                        background: #dc3545;
+                        color: white;
+                        border: none;
+                        border-radius: 10px;
+                        cursor: pointer;
+                        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+                        transition: all 0.2s;
+                    ">❌ No, Continue</button>
+                </div>
+            `;
+
+            overlay.appendChild(popup);
+            document.body.appendChild(overlay);
+
+            // เพิ่ม CSS animations
+            const style = document.createElement('style');
+            style.textContent = `
+                @keyframes fadeIn {
+                    from { opacity: 0; }
+                    to { opacity: 1; }
+                }
+                @keyframes slideIn {
+                    from { transform: scale(0.7) translateY(-30px); opacity: 0; }
+                    to { transform: scale(1) translateY(0); opacity: 1; }
+                }
+                @keyframes fadeOut {
+                    from { opacity: 1; transform: scale(1); }
+                    to { opacity: 0; transform: scale(0.8); }
+                }
+            `;
+            document.head.appendChild(style);
+
+            const closePopup = () => {
+                overlay.style.animation = 'fadeOut 0.3s ease-in-out forwards';
+                setTimeout(() => {
+                    if (document.body.contains(overlay)) {
+                        document.body.removeChild(overlay);
+                    }
+                    if (document.head.contains(style)) {
+                        document.head.removeChild(style);
+                    }
+                }, 300);
+            };
+
+            // จัดการเมื่อกดปุ่ม Yes - Complete current job
+            const yesBtn = popup.querySelector('#confirmYes');
+            yesBtn.addEventListener('click', async () => {
+                closePopup();
+                console.log(`✅ User confirmed completion of job ${currentJob.lot_no}`);
+                
+                // แสดง loading notification
+                showNotification(`🔄 Completing job ${currentJob.lot_no}...`, 'info');
+                
+                try {
+                    // ส่งคำสั่ง complete ผ่าน HTTP API โดยตรง
+                    const response = await fetch(`/command/${currentJob.jobId}/complete`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        }
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        console.log('✅ Job completed successfully:', data);
+                        
+                        // Clear persistent notifications และ active job
+                        clearPersistentNotifications();
+                        localStorage.removeItem(ACTIVE_JOB_KEY);
+                        
+                        // ดับไฟ LED
+                        fetch('/api/led/clear', { method: 'POST' });
+                        
+                        // เลือก job ใหม่
+                        selectJob(newJob.jobId);
+                        showNotification(`✅ Job ${currentJob.lot_no} completed. Switched to ${scannedLot}`, 'success');
+                        
+                        // Render UI ใหม่
+                        renderAll();
+                    } else {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                } catch (error) {
+                    console.error('❌ Error completing job:', error);
+                    showNotification(`❌ Failed to complete job: ${error.message}`, 'error');
+                    
+                    // ถ้า complete ไม่สำเร็จ ให้เลือก job ใหม่แทน
+                    selectJob(newJob.jobId);
+                    showNotification(`⚠️ Switched to ${scannedLot} (previous job not completed)`, 'warning');
+                }
+            });
+
+            // จัดการเมื่อกดปุ่ม No - Continue current job
+            const noBtn = popup.querySelector('#confirmNo');
+            noBtn.addEventListener('click', () => {
+                closePopup();
+                console.log(`❌ User chose to continue current job ${currentJob.lot_no}`);
+                showNotification(`Continue working on ${currentJob.lot_no}`, 'info');
+                
+                // Focus กลับไปที่ barcode input
+                const barcodeInput = document.getElementById('barcode-scanner-input');
+                if (barcodeInput) {
+                    setTimeout(() => barcodeInput.focus(), 100);
+                }
+            });
+
+            // เพิ่ม hover effects
+            yesBtn.addEventListener('mouseenter', () => {
+                yesBtn.style.transform = 'translateY(-2px)';
+                yesBtn.style.boxShadow = '0 6px 12px rgba(0,0,0,0.3)';
+            });
+            yesBtn.addEventListener('mouseleave', () => {
+                yesBtn.style.transform = 'translateY(0)';
+                yesBtn.style.boxShadow = '0 4px 8px rgba(0,0,0,0.2)';
+            });
+
+            noBtn.addEventListener('mouseenter', () => {
+                noBtn.style.transform = 'translateY(-2px)';
+                noBtn.style.boxShadow = '0 6px 12px rgba(0,0,0,0.3)';
+            });
+            noBtn.addEventListener('mouseleave', () => {
+                noBtn.style.transform = 'translateY(0)';
+                noBtn.style.boxShadow = '0 4px 8px rgba(0,0,0,0.2)';
+            });
+
+            // กด Escape เพื่อปิด (เหมือนกด No)
+            const escapeHandler = (e) => {
+                if (e.key === 'Escape') {
+                    document.removeEventListener('keydown', escapeHandler);
+                    noBtn.click();
+                }
+            };
+            document.addEventListener('keydown', escapeHandler);
+        }
+
+        /**
          * แสดง popup เตือนรูปแบบ LOT number
          */
         function showLotFormatWarningPopup(invalidLotNo = '') {
@@ -1279,6 +1477,24 @@ function getCellCapacity(level, block) {
             if (!activeJob) {
                 showNotification('❌ No active job to process barcode.', 'error');
                 return;
+            }
+
+            // ตรวจสอบว่าเป็นการสแกน lot number ใหม่ที่อยู่ใน queue หรือไม่
+            if (isValidLotNumberFormat(scannedData)) {
+                const queue = getQueue();
+                const queueJob = queue.find(job => job.lot_no === scannedData);
+                
+                if (queueJob && scannedData !== activeJob.lot_no) {
+                    // แสดง popup ยืนยันการเปลี่ยน job
+                    showJobConfirmationPopup(activeJob, queueJob, scannedData);
+                    return;
+                }
+                
+                // ถ้าสแกน lot เดียวกับ active job แต่เป็นการ confirm
+                if (scannedData === activeJob.lot_no) {
+                    showNotification(`✅ Confirmed current job: ${activeJob.lot_no}`, 'success');
+                    return;
+                }
             }
 
             const locationMatch = parseLocationFromBarcode(scannedData);
