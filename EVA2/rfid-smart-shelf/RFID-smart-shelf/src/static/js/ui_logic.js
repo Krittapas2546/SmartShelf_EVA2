@@ -618,17 +618,20 @@ function getCellCapacity(level, block) {
         }
 
         /**
-         * อัปเดตปุ่ม Queue Notification
+         * อัปเดตปุ่ม Queue Notification และ Back to Queue
          */
         function updateQueueNotificationButton() {
             const queueBtn = document.getElementById('queueNotificationBtn');
             const queueCountBadge = document.getElementById('queueCountBadge');
+            const backToQueueBtn = document.getElementById('backToQueueBtn');
             
             if (!queueBtn || !queueCountBadge) return;
             
             const queue = getQueue();
             const queueCount = queue.length;
+            const activeJob = getActiveJob();
             
+            // จัดการปุ่ม Queue Notification (แสดงในหน้า main เมื่อมี queue)
             if (showMainWithQueue && queueCount > 0) {
                 queueBtn.style.display = 'flex';
                 queueCountBadge.textContent = queueCount;
@@ -642,6 +645,15 @@ function getCellCapacity(level, block) {
             } else {
                 queueBtn.style.display = 'none';
                 queueBtn.classList.remove('pulse');
+            }
+            
+            // จัดการปุ่ม Back to Queue (แสดงเมื่อมี active job และไม่อยู่ใน mainView)
+            if (backToQueueBtn) {
+                if (activeJob && !showMainWithQueue) {
+                    backToQueueBtn.style.display = 'block';
+                } else {
+                    backToQueueBtn.style.display = 'none';
+                }
             }
         }
         // 🔼 END OF FIX 🔼
@@ -845,7 +857,7 @@ function getCellCapacity(level, block) {
                 
                 li.innerHTML = `
                     <div class="info">
-                        <div class="lot">${arrowHtml}Lot: ${job.lot_no}</div>
+                        <div class="lot">${arrowHtml} ${job.lot_no}</div>
                         <div class="action">Action: ${job.place_flg === '1' ? 'Place' : 'Pick'} at L:${job.level}, B:${job.block}</div>
                     </div>
                     <button class="select-btn" onclick="selectJob('${job.jobId}')">Select</button>
@@ -1541,6 +1553,30 @@ function getCellCapacity(level, block) {
                 setupWebSocket();
                 console.log('✅ WebSocket setup completed');
                 
+                // เพิ่มการโหลดงานจาก Gateway หลัง WebSocket setup
+                console.log('⏳ Loading pending jobs after startup...');
+                try {
+                    const pendingResult = await loadPendingJobsFromGateway();
+                    if (pendingResult && pendingResult.success) {
+                        console.log(`✅ Additional startup load: ${pendingResult.added}/${pendingResult.total} งาน`);
+                    }
+                } catch (pendingError) {
+                    console.warn('⚠️ Could not load additional pending jobs on startup:', pendingError);
+                }
+                
+                // Sync queue จาก backend เพื่อให้แน่ใจว่าข้อมูลตรงกัน
+                console.log('⏳ Syncing queue from backend...');
+                try {
+                    const syncResult = await syncQueueFromBackend();
+                    if (syncResult.success) {
+                        console.log(`✅ Queue synced: ${syncResult.jobs.length} jobs`);
+                    } else {
+                        console.warn('⚠️ Queue sync failed:', syncResult.error);
+                    }
+                } catch (syncError) {
+                    console.warn('⚠️ Could not sync queue on startup:', syncError);
+                }
+                
                 console.log('⏳ Rendering all components...');
                 renderAll();
                 console.log('✅ Initial setup completed successfully');
@@ -1602,6 +1638,37 @@ function getCellCapacity(level, block) {
                                 showNotification(`New Lot: ${data.payload.lot_no}`);
                             }
                             break;
+                        case "jobs_reloaded":
+                            console.log('🔄 Received jobs_reloaded message:', data.payload);
+                            
+                            // Sync queue จาก backend เพื่อให้แน่ใจว่าข้อมูลตรงกัน (async)
+                            syncQueueFromBackend().then(syncResult => {
+                                if (syncResult.success) {
+                                    console.log('✅ Queue synced successfully');
+                                    renderAll(); // อัปเดต UI หลัง sync
+                                } else {
+                                    console.warn('⚠️ Queue sync failed:', syncResult.error);
+                                    renderAll(); // อัปเดต UI แม้ sync ล้มเหลว
+                                }
+                            }).catch(syncError => {
+                                console.error('💥 Error during queue sync:', syncError);
+                                renderAll(); // อัปเดต UI แม้เกิด error
+                            });
+                            
+                            // แสดง notification ตามสถานการณ์
+                            const payload = data.payload;
+                            let notificationType = 'info';
+                            if (payload.loaded_count > 0) {
+                                notificationType = 'success';
+                            } else if (payload.skipped_count > 0) {
+                                notificationType = 'warning';
+                            }
+                            
+                            showNotification(`🔄 ${payload.message}`, notificationType);
+                            
+                            // Debug log
+                            console.log(`📊 Jobs status - Loaded: ${payload.loaded_count}, Skipped: ${payload.skipped_count}, Total Pending: ${payload.total_pending}, Queue Size: ${payload.total_queue_size}`);
+                            break;
                         case "job_completed":
                             console.log('📦 Received job_completed message:', data.payload);
                             
@@ -1647,6 +1714,37 @@ function getCellCapacity(level, block) {
                             initializeShelfState();
                             renderAll();
                             showNotification('System has been reset.', 'warning');
+                            break;
+                        case "job_canceled":
+                            console.log('Job canceled :', data.payload);
+                            
+                            // ลบ active job ถ้า lot_no ตรงกัน
+                            const activeJob = localStorage.getItem(ACTIVE_JOB_KEY);
+                            if (activeJob) {
+                                try {
+                                    const activeJobData = JSON.parse(activeJob);
+                                    if (activeJobData.lot_no === data.payload.lot_no) {
+                                        localStorage.removeItem(ACTIVE_JOB_KEY);
+                                        console.log(`Removed active job for lot ${data.payload.lot_no}`);
+                                    }
+                                } catch (e) {
+                                    console.error('Error parsing active job:', e);
+                                    localStorage.removeItem(ACTIVE_JOB_KEY); // Remove corrupted data
+                                }
+                            }
+                            
+                            // Sync queue จาก backend เพื่อให้แน่ใจว่า UI ตรงกับ backend
+                            syncQueueFromBackend().then(() => {
+                                // Render all components ใหม่หลังจาก sync เสร็จ
+                                renderAll();
+                            }).catch(error => {
+                                console.error('Error syncing queue after job canceled:', error);
+                                // Render ทันทีแม้ sync ไม่สำเร็จ
+                                renderAll();
+                            });
+                            
+                            // แสดง notification
+                            showNotification(`🗑️ Job canceled for Lot ${data.payload.lot_no || 'Unknown'} by Gateway`, 'warning');
                             break;
                     }
                 } catch (e) {
@@ -2536,5 +2634,46 @@ async function loadPendingJobsFromGateway() {
     }
 }
 
+// ฟังก์ชันสำหรับ sync queue จาก backend
+async function syncQueueFromBackend() {
+    try {
+        console.log('🔄 Syncing queue from backend...');
+        
+        const response = await fetch('/command', {
+            method: 'GET',
+            headers: {
+                'Accept': 'application/json'
+            }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            const backendJobs = data.jobs || [];
+            
+            console.log(`📦 Backend has ${backendJobs.length} jobs:`, backendJobs.map(j => `${j.lot_no}(${j.jobId})`));
+            
+            // อัปเดต localStorage ให้ตรงกับ backend
+            localStorage.setItem(QUEUE_KEY, JSON.stringify(backendJobs));
+            
+            // ล้าง active job ถ้าไม่มีในคิว backend
+            const activeJob = getActiveJob();
+            if (activeJob && !backendJobs.some(job => job.jobId === activeJob.jobId)) {
+                console.log(`🧹 Clearing orphaned active job: ${activeJob.jobId}`);
+                clearActiveJob();
+            }
+            
+            console.log(`✅ Queue synced: ${backendJobs.length} jobs`);
+            return { success: true, jobs: backendJobs };
+        } else {
+            console.error('❌ Failed to sync queue from backend:', response.status);
+            return { success: false, error: `HTTP ${response.status}` };
+        }
+    } catch (error) {
+        console.error('💥 Error syncing queue from backend:', error);
+        return { success: false, error: error.message };
+    }
+}
+
 // ทำให้ function เป็น global เพื่อเรียกจาก console ได้
 window.loadPendingJobsFromGateway = loadPendingJobsFromGateway;
+window.syncQueueFromBackend = syncQueueFromBackend;

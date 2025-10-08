@@ -111,7 +111,6 @@ def update_lot_biz(lot_no: str, biz: str):
                 lot['biz'] = biz
                 updated_count += 1
     return updated_count
-
 def migrate_existing_lots_add_biz():
     """เพิ่ม biz field ให้กับ lots ที่มีอยู่แล้วโดยไม่มี biz"""
     updated_count = 0

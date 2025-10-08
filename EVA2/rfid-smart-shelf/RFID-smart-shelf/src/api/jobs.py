@@ -804,6 +804,112 @@ async def reset_system():
     await manager.broadcast(json.dumps({"type": "system_reset"}))
     return {"status": "success"}
 
+@router.post("/clearCommand", tags=["Gateway Operations"])
+async def clear_command_from_gateway(request: Request):
+    """
+    Gateway สั่งยกเลิกงานเฉพาะ lot_no ออกจากคิว
+    
+    Request Body:
+    {
+        "shelf_id": "shelf_001",
+        "lot_no": "LOT123456",
+        "level": 1,
+        "block": 2,
+        "biz": "business_code"
+    }
+    """
+    try:
+        payload = await request.json()
+        shelf_id = payload.get("shelf_id")
+        lot_no = payload.get("lot_no")
+        level = payload.get("level")
+        block = payload.get("block")
+        biz = payload.get("biz")
+        
+        print(f"🗑️ Gateway Clear Command: Shelf {shelf_id}, Lot {lot_no}, Position L{level}B{block}")
+        
+        # ตรวจสอบข้อมูลที่จำเป็น
+        if not lot_no:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "shelf_id": shelf_id,
+                    "lot_no": lot_no,
+                    "message": "Missing lot_no parameter"
+                }
+            )
+        
+        # ค้นหางานที่ต้องการยกเลิก
+        job_to_cancel = None
+        for job in DB["jobs"]:
+            if job.get("lot_no") == lot_no:
+                job_to_cancel = job
+                break
+        
+        if not job_to_cancel:
+            # ไม่พบงานในคิว - อาจจะเสร็จแล้วหรือไม่มี
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "status": "not_found",
+                    "shelf_id": shelf_id,
+                    "lot_no": lot_no,
+                    "message": f"Job for lot {lot_no} not found in queue"
+                }
+            )
+        
+        # ลบงานออกจากคิว
+        DB["jobs"] = [job for job in DB["jobs"] if job.get("lot_no") != lot_no]
+        
+        # ล้าง LED สำหรับตำแหน่งนั้น (ถ้ามีการระบุ level, block)
+        if level and block:
+            try:
+                from core.led_controller import set_led
+                set_led(int(level), int(block), 0, 0, 0)  # Turn off LED
+                print(f"💡 LED cleared for L{level}B{block}")
+            except Exception as led_error:
+                print(f"⚠️ LED clear failed: {led_error}")
+        
+        print(f"✅ Gateway Clear Command Success: Lot {lot_no} removed from queue")
+        
+        # Broadcast to WebSocket clients
+        broadcast_message = {
+            "type": "job_canceled",
+            "payload": {
+                "lot_no": lot_no,
+                "level": level,
+                "block": block,
+                "shelf_id": shelf_id,
+                "biz": biz,
+                "canceled_job": job_to_cancel,
+                "message": f"Job for lot {lot_no} canceled by Gateway"
+            }
+        }
+        
+        print(f"📡 Broadcasting job_canceled: {broadcast_message}")
+        await manager.broadcast(json.dumps(broadcast_message))
+        
+        return {
+            "status": "success",
+            "shelf_id": shelf_id,
+            "lot_no": lot_no,
+            "message": f"Command canceled successfully for lot {lot_no}",
+            "canceled_job": job_to_cancel
+        }
+        
+    except Exception as e:
+        print(f"❌ Gateway Clear Command Error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "shelf_id": payload.get("shelf_id", "unknown") if 'payload' in locals() else "unknown",
+                "lot_no": payload.get("lot_no", "unknown") if 'payload' in locals() else "unknown",
+                "message": f"Internal server error: {str(e)}"
+            }
+        )
+
 @router.get("/api/shelf/occupied", tags=["Jobs"])
 def get_occupied_positions():
     """ดึงข้อมูลเฉพาะช่องที่มีของอยู่ในชั้นวาง (มี lot อย่างน้อย 1)"""

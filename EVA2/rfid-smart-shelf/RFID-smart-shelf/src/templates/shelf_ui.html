@@ -51,25 +51,6 @@
 
     <!-- View 2: หน้าสำหรับทำงาน (Active Job) -->
     <main id="mainView" style="display: none; position: relative;">
-        <!-- Back to Queue Button - เพิ่มปุ่มด้านล่าง -->
-        <button id="backToQueueBtn" class="back-to-main-btn" onclick="goBackToQueue()" style="
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            background: #6c757d;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            padding: 10px 20px;
-            font-size: 1em;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-            z-index: 1001;
-        ">
-            ← Back to Queue
-        </button>
-        
         <!-- 🔽 ADD HIDDEN INPUT FOR BARCODE SCANNER 🔽 -->
         <input type="text" id="barcode-scanner-input" style="position: absolute; left: -9999px; opacity: 0;" placeholder="Barcode Scanner Input">
         <!-- 🔼 END OF ADDED INPUT 🔼 -->
@@ -97,6 +78,26 @@
             </div>
         </div>
     </main>
+
+    <!-- Back to Queue Button - Global button อยู่มุมล่างซ้ายเสมอ -->
+    <button id="backToQueueBtn" class="back-to-main-btn" onclick="goBackToQueue()" style="
+        position: fixed;
+        bottom: 20px;
+        left: 20px;
+        background: #6c757d;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 10px 20px;
+        font-size: 1em;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        z-index: 1001;
+        display: none;
+    ">
+        ← Back to Queue
+    </button>
 
     <!-- เรียกใช้ไฟล์ JavaScript ภายนอก (ควรวางไว้ท้าย body) -->
     <script src="/static/js/ui_logic.js"></script>
