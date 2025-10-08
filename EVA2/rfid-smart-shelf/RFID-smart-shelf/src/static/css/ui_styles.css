@@ -617,7 +617,7 @@ body {
 
 .back-to-main-btn {
     position: fixed;
-    bottom: 10px;
+    top : 20px;
     left: 10px;
     background: #6c757d;
     color: white;

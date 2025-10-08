@@ -17,7 +17,7 @@
         <!-- 🔽 ADD THIS ENTIRE BLOCK 🔽 -->
         <div class="barcode-scanner-container">
             <input type="text" id="lot-no-input" placeholder="🔍 Ready for Barcode Scanner - Scan or type Lot No.">
-            <button onclick="handleLotSearch()">Find Job</button>
+            <button class="back-to-main-btn" onclick="handleLotSearch()" style="position: static; top: auto; left: auto; z-index: auto;">Find Job</button>
         </div>
         <!-- 🔼 END OF ADDED BLOCK 🔼 -->
 
@@ -45,7 +45,7 @@
 
         <!-- Back to Main Button - ย้ายมาอยู่ด้านล่าง -->
         <button id="backToMainBtn" class="back-to-main-btn" onclick="goBackToMain()">
-            ← Back to Main
+            ← Back
         </button>
     </div>
 
@@ -54,13 +54,6 @@
         <!-- 🔽 ADD HIDDEN INPUT FOR BARCODE SCANNER 🔽 -->
         <input type="text" id="barcode-scanner-input" style="position: absolute; left: -9999px; opacity: 0;" placeholder="Barcode Scanner Input">
         <!-- 🔼 END OF ADDED INPUT 🔼 -->
-        
-        <!-- Queue notification button (แสดงเมื่อมี queue และอยู่ในโหมด main) -->
-        <div id="queueNotificationBtn" class="queue-notification-btn" onclick="goToQueueSelection()" style="display: none;">
-            <span class="queue-icon">📋</span>
-            <span class="queue-count-badge" id="queueCountBadge">0</span>
-            <span class="queue-text">Jobs Waiting</span>
-        </div>
         
         <div class="main-container">
             <!-- Shelf Panel (กลาง) -->
@@ -79,10 +72,10 @@
         </div>
     </main>
 
-    <!-- Back to Queue Button - Global button อยู่มุมล่างซ้ายเสมอ -->
+    <!-- Back Button - Global button อยู่มุมบนซ้ายเสมอ -->
     <button id="backToQueueBtn" class="back-to-main-btn" onclick="goBackToQueue()" style="
         position: fixed;
-        bottom: 20px;
+        top: 20px;
         left: 20px;
         background: #6c757d;
         color: white;
@@ -96,8 +89,40 @@
         z-index: 1001;
         display: none;
     ">
-        ← Back to Queue
+        ← Back
     </button>
+
+    <!-- Jobs Waiting Button - Global button อยู่มุมบนซ้าย ถัดจากปุ่ม Back -->
+    <div id="queueNotificationBtn" onclick="goToQueueSelection()" style="
+        position: fixed;
+        top: 20px;
+        left: 20px;
+        background: #007bff;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 10px 20px;
+        font-size: 1em;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        z-index: 1000;
+        display: none;
+        align-items: center;
+        gap: 8px;
+    ">
+        <span class="queue-icon"></span>
+        <span class="queue-count-badge" id="queueCountBadge" style="
+            background: #dc3545;
+            color: white;
+            border-radius: 50%;
+            padding: 2px 8px;
+            font-size: 0.8em;
+            min-width: 20px;
+            text-align: center;
+        ">0</span>
+        <span class="queue-text">Jobs Waiting</span>
+    </div>
 
     <!-- เรียกใช้ไฟล์ JavaScript ภายนอก (ควรวางไว้ท้าย body) -->
     <script src="/static/js/ui_logic.js"></script>
