@@ -137,21 +137,6 @@ async def send_shelf_complete_to_gateway(job: dict):
 router = APIRouter() # <-- สร้าง router สำหรับไฟล์นี้
 templates = Jinja2Templates(directory=str(pathlib.Path(__file__).parent.parent / "templates"))
 
-# --- Routes ---
-
-# --- LED Control Endpoint ---
-
-# ลบ endpoint ที่ซ้ำกัน - ใช้แค่อันด้านล่างที่ tags=["Jobs"]
-# @router.get("/api/shelf/config", tags=["System"])
-# def get_shelf_config():
-#     config = SHELF_CONFIG
-#     total_levels = len(config)
-#     max_blocks = max(config.values())
-#     return JSONResponse(content={
-#         "config": config,
-#         "total_levels": total_levels,
-#         "max_blocks": max_blocks
-#     })
 
 
 # รองรับสั่งทีละดวง (เดิม)
@@ -441,16 +426,14 @@ def health_check():
     return {"status": "ok", "message": "Barcode Smart Shelf Server is running"}
 
 @router.post("/api/shelf/askCorrectShelf", tags=["Shelf Operations"])
-async def ask_correct_shelf(request: Request):
+async def ask_correct_shelf(request: LMSCheckShelfRequest):
     """
     Smart Shelf ส่งคำขอไป Gateway เพื่อตรวจสอบชั้นวางที่ถูกต้อง
     Smart Shelf → Gateway → LMS → Gateway → Smart Shelf
     """
     try:
-        # รับข้อมูลจาก client
-        payload = await request.json()
-        lot_no = payload.get("lot_no")
-        place_flg = payload.get("place_flg", "1")
+        # รับข้อมูลจาก Pydantic model
+        lot_no = request.lot_no
         
         if not lot_no:
             return JSONResponse(
@@ -471,10 +454,9 @@ async def ask_correct_shelf(request: Request):
                 }
             )
         
-        # เตรียมข้อมูลสำหรับส่งไป Gateway
+        # เตรียมข้อมูลสำหรับส่งไป Gateway (เฉพาะ lot_no ตาม format ใหม่)
         gateway_payload = {
-            "lot_no": lot_no,
-            "place_flg": place_flg
+            "lot_no": lot_no
         }
         
         # ส่งไป Gateway แทนการส่งไป LMS โดยตรง
@@ -495,39 +477,78 @@ async def ask_correct_shelf(request: Request):
             )
             
             if response.status_code == 200:
-                lms_response = response.json()
+                gateway_response = response.json()
+                print(f"📋 Gateway response: {gateway_response}")
                 
-                # ตรวจสอบ response format ใหม่ที่มี status, correct_shelf, lot_no, message
-                if ("status" in lms_response and "correct_shelf" in lms_response and 
-                    "lot_no" in lms_response and "message" in lms_response):
+                # ตรวจสอบว่ามี status และ lot_no
+                if "status" in gateway_response and "lot_no" in gateway_response:
                     
-                    # ตรวจสอบว่า LMS ประมวลผลสำเร็จหรือไม่
-                    if lms_response["status"] == "success":
+                    # ตรวจสอบว่า Gateway/LMS ประมวลผลสำเร็จหรือไม่
+                    if gateway_response["status"] == "success":
+                        # รองรับทั้ง correct_shelf และ correct_shelf_name
+                        correct_shelf = (gateway_response.get("correct_shelf_name") or 
+                                       gateway_response.get("correct_shelf") or 
+                                       "UNKNOWN_SHELF")
+                        
+                        # ตรวจสอบว่ามีข้อมูล shelf หรือไม่
+                        if correct_shelf == "UNKNOWN_SHELF" or correct_shelf == "undefined" or not correct_shelf:
+                            return JSONResponse(
+                                status_code=404,
+                                content={
+                                    "error": "Shelf information not found",
+                                    "message": f"No shelf information found for LOT {gateway_response['lot_no']}",
+                                    "status": "not_found"
+                                }
+                            )
+                        
                         return {
                             "status": "success",
-                            "correct_shelf": lms_response["correct_shelf"],
-                            "lot_no": lms_response["lot_no"],
-                            "message": lms_response["message"]
+                            "correct_shelf_name": correct_shelf,
+                            "lot_no": gateway_response["lot_no"],
+                            "message": gateway_response.get("message", f"Found correct shelf: {correct_shelf}")
                         }
                     else:
+                        # กรณี error response แบบใหม่ที่มี code และ data
+                        error_code = gateway_response.get("code", 400)
                         return JSONResponse(
-                            status_code=400,
+                            status_code=error_code,
                             content={
-                                "error": "LMS processing failed",
-                                "message": lms_response.get("message", "Unknown error from LMS"),
-                                "status": lms_response["status"]
+                                "error": "Gateway/LMS processing failed",
+                                "message": gateway_response.get("message", "Unknown error from Gateway/LMS"),
+                                "status": gateway_response["status"],
+                                "code": error_code,
+                                "data": gateway_response.get("data", [])
                             }
                         )
                 else:
                     return JSONResponse(
                         status_code=502,
                         content={
-                            "error": "Invalid LMS response format",
-                            "message": "LMS response missing required fields (status, correct_shelf, lot_no, message)",
-                            "received_fields": list(lms_response.keys())
+                            "error": "Invalid Gateway response format",
+                            "message": "Gateway response missing required fields (status, lot_no)",
+                            "received_fields": list(gateway_response.keys()),
+                            "raw_response": gateway_response
                         }
                     )
             else:
+                # ตรวจสอบว่าเป็น error response แบบใหม่หรือไม่
+                try:
+                    error_response = response.json()
+                    if "status" in error_response and error_response["status"] == "error":
+                        error_code = error_response.get("code", response.status_code)
+                        return JSONResponse(
+                            status_code=error_code,
+                            content={
+                                "error": "Gateway/LMS error",
+                                "message": error_response.get("message", "Unknown error"),
+                                "status": "error",
+                                "code": error_code,
+                                "data": error_response.get("data", [])
+                            }
+                        )
+                except:
+                    pass  # ไม่สามารถ parse JSON ได้
+                
                 return JSONResponse(
                     status_code=502,
                     content={
@@ -541,16 +562,16 @@ async def ask_correct_shelf(request: Request):
         return JSONResponse(
             status_code=504,
             content={
-                "error": "LMS server timeout",
-                "message": "Connection to LMS server timed out"
+                "error": "Gateway server timeout",
+                "message": "Connection to Gateway server timed out"
             }
         )
     except httpx.ConnectError:
         return JSONResponse(
             status_code=503,
             content={
-                "error": "LMS server unavailable",
-                "message": "Cannot connect to LMS server"
+                "error": "Gateway server unavailable",
+                "message": "Cannot connect to Gateway server"
             }
         )
     except Exception as e:

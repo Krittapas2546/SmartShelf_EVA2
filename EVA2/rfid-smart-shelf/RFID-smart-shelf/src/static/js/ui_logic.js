@@ -1041,8 +1041,9 @@ function getCellCapacity(level, block) {
 
         /**
          * ตรวจสอบว่า LOT number มีรูปแบบที่ถูกต้องหรือไม่
-         * รูปแบบที่ถูกต้อง: ตัวอักษร 1 ตัว + ตัวเลข 6 หลัก + "TL." + ตัวเลข 2 หลัก
-         * ตัวอย่าง: Y531103TL.07, A123456TL.01, B999999TL.99
+         * รูปแบบใหม่: Alphanumeric 12 ตัว (xxxxxxxxx.xx)
+         * - 9 ตัวอักษร/ตัวเลข + จุด + 2 ตัวเลข
+         * - ตัวอย่าง: ABC123DEF.01, Y540C02AS.01, 123456789.99
          * @param {string} lotNo - หมายเลข LOT ที่ต้องตรวจสอบ
          * @returns {boolean} - true ถ้ารูปแบบถูกต้อง
          */
@@ -1051,10 +1052,18 @@ function getCellCapacity(level, block) {
                 return false;
             }
             
-            // รูปแบบ: ตัวอักษร 1 ตัว + ตัวเลข 6 หลัก + ตัวอักษร 2 ตัว + "." + ตัวเลข 2 หลัก
-            // ตัวอย่าง: Y531103TL.07
-            const lotPattern = /^[A-Za-z]\d{6}[A-Za-z]{2}\.\d{2}$/;
-            return lotPattern.test(lotNo.trim());
+            const trimmedLot = lotNo.trim();
+            
+            // รูปแบบหลัก: Alphanumeric 12 ตัว (xxxxxxxxx.xx)
+            // 9 ตัวอักษร/ตัวเลข + จุด + 2 ตัวเลข
+            // ตัวอย่าง: ABC123DEF.01, Y540C02AS.01, 123456789.99
+            const mainPattern = /^[A-Za-z0-9]{9}\.\d{2}$/;
+            
+            console.log(`🔍 Validating LOT format: "${trimmedLot}" against pattern: ${mainPattern}`);
+            const isValid = mainPattern.test(trimmedLot);
+            console.log(`✅ LOT validation result: ${isValid} (Expected format: xxxxxxxxx.xx)`);
+            
+            return isValid;
         }
 
         /**
@@ -1303,10 +1312,10 @@ function getCellCapacity(level, block) {
             `;
 
             // แสดงข้อความแตกต่างกันตาม LOT ที่ป้อน
-            const displayLot = invalidLotNo || 'Y531103TL.07';
+            const displayLot = invalidLotNo || 'ABC123DEF.01';
             const titleText = invalidLotNo ? 'Invalid LOT Format' : 'LOT Not in Job Queue';
             const messageText = invalidLotNo 
-                ? 'Please scan only Lot No. data' 
+                ? 'Please scan only Lot No. data (Format: xxxxxxxxx.xx)' 
                 : `LOT ${displayLot} not found in current job queue`;
 
             popup.innerHTML = `
@@ -1607,52 +1616,135 @@ function getCellCapacity(level, block) {
             console.log(`📝 Job details:`, {
                 level: activeJob.level,
                 block: activeJob.block,
-                place_flg: activeJob.place_flg
+                place_flg: activeJob.place_flg,
+                biz: activeJob.biz,
+                shelf_id: activeJob.shelf_id
             });
+            console.log(`🎯 Target API endpoint: POST /command/${activeJob.jobId}/complete`);
 
             // Clear loggedCells so next render logs new state
             if (window.__rfid_loggedCells) window.__rfid_loggedCells.clear();
 
-            // ส่งข้อมูลผ่าน WebSocket
-            if (websocketConnection && websocketConnection.readyState === WebSocket.OPEN) {
-                const message = {
-                    type: 'complete_job',
-                    payload: {
-                        jobId: activeJob.jobId,
-                        lot_no: activeJob.lot_no,
-                        level: activeJob.level,
-                        block: activeJob.block,
-                        completedAt: new Date().toISOString()
-                    }
-                };
-                websocketConnection.send(JSON.stringify(message));
-                console.log('📤 Complete job message sent via WebSocket:', message.payload);
-            } else {
-                console.warn('⚠️ WebSocket not available, using HTTP fallback');
+            // 🔄 ใช้ HTTP API เป็นหลักเพื่อความเสถียร (แทนที่ WebSocket)
+            console.log('📤 Sending complete job request via HTTP API...');
+            
+            fetch(`/command/${activeJob.jobId}/complete`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            .then(response => {
+                console.log('� Complete job response status:', response.status);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return response.json();
+            })
+            .then(async data => {
+                console.log('✅ Job completed successfully via HTTP API:', data);
                 
-                fetch(`/command/${activeJob.jobId}/complete`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
+                if (data.status === 'success') {
+                    // แสดง notification พร้อมรายละเอียด
+                    const action = data.action || 'processed';
+                    const location = data.location || `L${activeJob.level}B${activeJob.block}`;
+                    showNotification(`✅ Job completed for Lot ${data.lot_no || activeJob.lot_no} - ${action} at ${location}!`, 'success');
+                    
+                    // Validate job completion
+                    const isValid = await validateJobCompletion(activeJob.jobId, activeJob.lot_no);
+                    if (isValid) {
+                        console.log('🎯 Job completion validated successfully');
+                    } else {
+                        console.warn('⚠️ Job completion validation failed, but continuing...');
                     }
-                })
-                .then(response => {
-                    return response.json();
-                })
-                .then(data => {
-                    console.log('✅ Job completed via HTTP API:', data);
-                    showNotification(`✅ Job completed successfully!`, 'success');
-                    clearPersistentNotifications(); // Clear persistent notifications on job completion
+                    
+                    // Clear active job
+                    clearPersistentNotifications();
                     localStorage.removeItem(ACTIVE_JOB_KEY);
+                    
+                    // รีเฟรช shelf state จาก server
+                    await refreshShelfStateFromServer();
                     renderAll();
 
                     // ดับไฟ LED หลังงานเสร็จ
                     fetch('/api/led/clear', { method: 'POST' });
-                })
-                .catch(error => {
-                    console.error('❌ Error completing job:', error);
-                    showNotification('❌ Error completing job. Please try again.', 'error');
+                } else {
+                    throw new Error(data.message || 'Job completion failed');
+                }
+            })
+            .catch(error => {
+                console.error('❌ Error completing job:', error);
+                showNotification(`❌ Error completing job: ${error.message}. Please try again.`, 'error');
+            });
+        }
+
+        /**
+         * รีเฟรช shelf state จาก server หลังจาก complete job
+         */
+        async function refreshShelfStateFromServer() {
+            try {
+                console.log('🔄 Refreshing shelf state from server...');
+                
+                const response = await fetch('/api/shelf/state', {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
                 });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log('📦 Updated shelf state from server:', data);
+                    
+                    // อัปเดต global shelf state
+                    window.shelfState = data.shelf_state || [];
+                    
+                    // ลบ job ออกจาก queue ใน localStorage ด้วย
+                    const currentQueue = getQueue();
+                    const activeJob = getActiveJob();
+                    if (activeJob) {
+                        const updatedQueue = currentQueue.filter(job => job.jobId !== activeJob.jobId);
+                        localStorage.setItem(QUEUE_KEY, JSON.stringify(updatedQueue));
+                        console.log(`🗑️ Removed completed job ${activeJob.jobId} from local queue`);
+                    }
+                    
+                    console.log('✅ Shelf state refreshed successfully');
+                } else {
+                    console.error('❌ Failed to refresh shelf state:', response.status);
+                }
+            } catch (error) {
+                console.error('💥 Error refreshing shelf state:', error);
+            }
+        }
+
+        /**
+         * ตรวจสอบสถานะงานจาก backend เพื่อป้องกัน desync
+         */
+        async function validateJobCompletion(jobId, lotNo) {
+            try {
+                console.log(`🔍 Validating job completion: ${jobId} (${lotNo})`);
+                
+                // ตรวจสอบว่างานยังอยู่ใน backend queue หรือไม่
+                const queueResponse = await fetch('/command', {
+                    method: 'GET',
+                    headers: { 'Accept': 'application/json' }
+                });
+                
+                if (queueResponse.ok) {
+                    const queueData = await queueResponse.json();
+                    const jobStillExists = queueData.jobs.some(job => job.jobId === jobId);
+                    
+                    if (jobStillExists) {
+                        console.warn(`⚠️ Job ${jobId} still exists in backend queue after completion`);
+                        return false;
+                    } else {
+                        console.log(`✅ Job ${jobId} successfully removed from backend queue`);
+                        return true;
+                    }
+                }
+            } catch (error) {
+                console.error('💥 Error validating job completion:', error);
+                return false;
             }
         }
 
@@ -2674,28 +2766,36 @@ function getCellCapacity(level, block) {
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        lot_no: lotNo,
-                        place_flg: placeFlg
+                        lot_no: lotNo
                     })
                 });
 
+                console.log('📡 LMS API Response Status:', response.status);
                 const result = await response.json();
+                console.log('📋 LMS API Response Data:', result);
 
                 if (response.ok && result.status === 'success') {
+                    // รองรับทั้ง correct_shelf_name และ correct_shelf
+                    const correctShelf = result.correct_shelf_name || result.correct_shelf || 'UNKNOWN';
+                    
+                    console.log('✅ LMS Success - Shelf:', correctShelf);
+                    
                     // Success - แสดง location popup แบบใหม่
-                    showLMSLocationPopup(result.lot_no, result.correct_shelf, 'warning', 0);
+                    showLMSLocationPopup(result.lot_no, correctShelf, 'warning', 0);
                     
                     return {
                         success: true,
-                        correctShelf: result.correct_shelf,
+                        correctShelf: correctShelf,
                         lotNo: result.lot_no
                     };
                 } else {
+                    console.error('❌ LMS API Error:', result);
+                    
                     // Error popup
                     showLMSAlertPopup(
                         '❌ Not found in LMS',
-                        `LOT ${lotNo} is not in the system`,
-                        null,
+                        result.message || `LOT ${lotNo} is not in the system`,
+                        `Status: ${result.status || 'unknown'}<br>Code: ${result.code || 'N/A'}`,
                         'error',
                         5000
                     );

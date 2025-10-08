@@ -34,14 +34,19 @@ class LEDPositionsRequest(BaseModel):
     ])
 
 class LMSCheckShelfRequest(BaseModel):
-    lot_no: str = Field(..., example="Y531103TL.07")
-    place_flg: str = Field(..., example="1")
+    lot_no: str = Field(..., example="ABC123DEF.01", description="LOT number format: 9 alphanumeric + dot + 2 digits")
 
 class LMSCheckShelfResponse(BaseModel):
     status: str = Field(..., example="success")
-    correct_shelf: str = Field(..., example="AM_BURN_S_0006")
-    lot_no: str = Field(..., example="Y531103TL.07")
-    message: str = Field(..., example="Found correct shelf for Y531103TL.07")
+    correct_shelf_name: str = Field(..., example="SHELF_A01")
+    lot_no: str = Field(..., example="ABC123DEF.01")
+    message: str = Field(..., example="Found correct shelf")
+
+class LMSCheckShelfErrorResponse(BaseModel):
+    status: str = Field(..., example="error")
+    message: str = Field(..., example="Lot number not found in LMS")
+    code: int = Field(..., example=500)
+    data: List = Field(..., example=[])
 
 class LEDClearAndBatch(BaseModel):
     """Model สำหรับควบคุม LED แบบ clear ก่อนแล้วค่อย batch เพื่อป้องกันการกระพริบ"""
