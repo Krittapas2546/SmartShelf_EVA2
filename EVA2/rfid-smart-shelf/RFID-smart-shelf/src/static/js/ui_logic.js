@@ -272,7 +272,7 @@ function getCellCapacity(level, block) {
                         });
                         
                         // แสดง notification
-                        showNotification(`Layout โหลดจาก Gateway สำเร็จ (${Object.keys(gatewayLayout).length} ช่อง)`, 'success');
+                        showNotification(`Layout load Gateway(${Object.keys(gatewayLayout).length} Blocks)`, 'success');
                         
                         return true;
                     }
