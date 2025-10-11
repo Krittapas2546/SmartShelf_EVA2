@@ -105,18 +105,19 @@ function getCellCapacity(level, block) {
             console.log(`💡 LED Queue Mode: ${queue.length} jobs`);
             
             // เตรียม batch สำหรับทุก job ใน queue
-            const leds = queue.map(job => ({
-                level: Number(job.level),
-                block: Number(job.block),
+            const positions = queue.map(job => ({
+                position: `L${Number(job.level)}B${Number(job.block)}`,
                 r: 0, g: 150, b: 255 // ฟ้าสว่างสำหรับ queue
             }));
             
-            fetch('/api/led/clear', { method: 'POST' })
-                .then(() => fetch('/api/led/batch', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ leds })
-                }))
+            fetch('/api/led', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    positions,
+                    clear_first: true 
+                })
+            })
                 .then(response => {
                     if (!response.ok) {
                         console.error('💡 LED Queue batch failed:', response.status);
@@ -2290,43 +2291,42 @@ function getCellCapacity(level, block) {
 
             console.log(`💡 LED Control: Active job L${level}B${block}, Place=${activeJob.place_flg}`);
 
-            // ดับไฟทั้งหมดก่อน
-            fetch('/api/led/clear', { method: 'POST' })
-                .then(() => {
-                    // ถ้าอยู่ใน error state และมี wrong location
-                    if (activeJob.error && activeJob.errorType === 'WRONG_LOCATION' && activeJob.errorMessage) {
-                        const match = activeJob.errorMessage.match(/L(\d+)-B(\d+)/);
-                        if (match) {
-                            const wrongLevel = Number(match[1]);
-                            const wrongBlock = Number(match[2]);
-                            
-                            console.log(`💡 LED Error Mode: Target L${level}B${block}, Wrong L${wrongLevel}B${wrongBlock}`);
-                            
-                            // ใช้ batch API สำหรับการจุดไฟหลายตำแหน่ง
-                            const leds = [
-                                { level, block, ...targetColor }, // ช่องเป้าหมาย (ฟ้า/ส้ม)
-                                { level: wrongLevel, block: wrongBlock, r: 255, g: 0, b: 0 } // ช่องผิด (แดง)
-                            ];
-                            
-                            return fetch('/api/led/batch', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ leds })
-                            });
-                        }
-                    }
+            // ถ้าอยู่ใน error state และมี wrong location
+            if (activeJob.error && activeJob.errorType === 'WRONG_LOCATION' && activeJob.errorMessage) {
+                const match = activeJob.errorMessage.match(/L(\d+)-B(\d+)/);
+                if (match) {
+                    const wrongLevel = Number(match[1]);
+                    const wrongBlock = Number(match[2]);
                     
-                    // โหมดปกติ - จุดไฟเฉพาะช่องเป้าหมาย
-                    console.log(`💡 LED Normal Mode: Target L${level}B${block}`);
-                    return fetch('/api/led/position', {
+                    console.log(`💡 LED Error Mode: Target L${level}B${block}, Wrong L${wrongLevel}B${wrongBlock}`);
+                    
+                    // ใช้ unified API สำหรับการจุดไฟหลายตำแหน่ง พร้อมการลบไฟก่อน
+                    const positions = [
+                        { position: `L${level}B${block}`, ...targetColor }, // ช่องเป้าหมาย (ฟ้า/ส้ม)
+                        { position: `L${wrongLevel}B${wrongBlock}`, r: 255, g: 0, b: 0 } // ช่องผิด (แดง)
+                    ];
+                    
+                    return fetch('/api/led', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ 
-                            position: `L${level}B${block}`, 
-                            ...targetColor 
+                            positions, 
+                            clear_first: true 
                         })
                     });
+                }
+            }
+            
+            // โหมดปกติ - จุดไฟเฉพาะช่องเป้าหมาย พร้อมการลบไฟก่อน
+            console.log(`💡 LED Normal Mode: Target L${level}B${block}`);
+            return fetch('/api/led', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    position: `L${level}B${block}`, 
+                    ...targetColor
                 })
+            })
                 .then(response => {
                     if (!response.ok) {
                         console.error('💡 LED Control failed:', response.status);
