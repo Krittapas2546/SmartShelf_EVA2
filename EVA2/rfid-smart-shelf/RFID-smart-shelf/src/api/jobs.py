@@ -84,7 +84,7 @@ async def fetch_layout_from_gateway(shelf_id: str = None):
             if response.status_code == 200:
                 response_data = response.json()
                 print(f"✅ Layout fetched successfully")
-                print(f"📦 Layout data: {response_data}")
+              #  print(f"📦 Layout data: {response_data}")
                 
                 return response_data
             else:
@@ -601,19 +601,6 @@ def get_shelf_state():
         })
     return {"shelf_state": shelf_state}
 
-@router.get("/api/shelf/config", tags=["Jobs"])
-def get_shelf_config():
-    """ดึงข้อมูลการกำหนดค่าของชั้นวาง"""
-    config = get_shelf_info()
-    # เพิ่มข้อมูลความจุรายช่อง
-    config["cell_capacities"] = {}
-    for level, num_blocks in SHELF_CONFIG.items():
-        for block in range(1, num_blocks + 1):
-            cell_key = f"{level}-{block}"
-            capacity = get_cell_capacity(level, block)
-            config["cell_capacities"][cell_key] = capacity
-    return config
-
 @router.get("/api/shelf/layout/status", tags=["Shelf Layout Management"])
 def get_layout_status_api():
     """
@@ -640,63 +627,6 @@ def get_layout_status_api():
                 "message": f"Failed to get layout status: {str(e)}"
             }
         )
-
-@router.get("/api/shelf/capacity/{level}/{block}", tags=["Jobs"])
-def get_cell_capacity_api(level: int, block: int):
-    """ดึงความจุของช่องเฉพาะ"""
-    if not validate_position(level, block):
-        return {
-            "error": "Invalid position",
-            "message": f"Position L{level}B{block} does not exist in shelf configuration"
-        }
-    
-    capacity = get_cell_capacity(level, block)
-    lots = get_lots_in_position(level, block)
-    current_tray = sum(lot.get("tray_count", 0) for lot in lots)
-    
-    return {
-        "level": level,
-        "block": block,
-        "max_capacity": capacity,
-        "current_tray": current_tray,
-        "available_space": capacity - current_tray,
-        "usage_percentage": round((current_tray / capacity) * 100, 1) if capacity > 0 else 0,
-        "is_full": current_tray >= capacity
-    }
-
-@router.get("/api/shelf/position/{level}/{block}", tags=["Jobs"])
-def get_position_info(level: int, block: int):
-    """ดึงข้อมูลของช่องเฉพาะ (level, block)"""
-    if not validate_position(level, block):
-        return {
-            "error": "Invalid position",
-            "message": f"Position L{level}B{block} does not exist in shelf configuration"
-        }
-    lots = get_lots_in_position(level, block)
-    return {
-        "level": level,
-        "block": block,
-        "lots": lots,
-        "message": f"Position L{level}B{block}: {len(lots)} lot(s)"
-    }
-
-@router.get("/api/shelf/lots", tags=["Jobs"])
-def get_all_lots_in_shelf():
-    """ดึงรายการ Lot ทั้งหมดที่อยู่ในชั้นวาง (ทุก lot ทุก cell)"""
-    lots_info = []
-    for cell in DB["shelf_state"]:
-        level, block, lots = cell
-        for lot in lots:
-            lots_info.append({
-                "level": level,
-                "block": block,
-                "lot_no": lot["lot_no"],
-                "tray_count": lot["tray_count"]
-            })
-    return {
-        "total_lots": len(lots_info),
-        "lots": lots_info
-    }
 
 @router.post("/command", status_code=201, tags=["Jobs"])
 async def create_job_via_api(job: JobRequest):
@@ -1524,7 +1454,7 @@ async def restore_shelf_state_from_gateway():
             if response.status_code == 200:
                 response_data = response.json()
                 print(f"✅ Shelf state restored successfully")
-                print(f"📦 Restored state: {response_data}")
+                #print(f"📦 Restored state: {response_data}")
                 
         
                 shelf_state = response_data.get("data", [])

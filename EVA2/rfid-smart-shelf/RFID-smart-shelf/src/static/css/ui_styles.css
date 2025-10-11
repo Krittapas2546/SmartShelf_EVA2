@@ -446,7 +446,7 @@ body {
   display: block;
   box-shadow: 0 2px 6px rgba(0,0,0,0.07);
   /* ใช้ height ที่กำหนดจาก JavaScript แทนการ override */
-  min-height: 2px;
+  min-height: 1px;
 }
 .shelf-cell .stacked-lot.target-lot {
   background: #4dabf7; /* สีฟ้าสว่างให้สอดคล้องกับสไตล์หลัก */
