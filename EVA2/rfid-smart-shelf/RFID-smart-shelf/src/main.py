@@ -37,6 +37,48 @@ async def initialize_shelf_info():
         print(f"❌ Error initializing shelf info: {e}")
         return False
 
+async def initialize_shelf_layout():
+    """ดึง layout configuration จาก Gateway เมื่อเริ่มต้นระบบ"""
+    try:
+        print("🔄 Initializing shelf layout from Gateway...")
+        
+        # Import ฟังก์ชันที่จำเป็น
+        from api.jobs import fetch_layout_from_gateway, GLOBAL_SHELF_INFO
+        from core.database import update_layout_from_gateway
+        
+        # ตรวจสอบว่ามี shelf_id แล้วหรือไม่
+        shelf_id = GLOBAL_SHELF_INFO.get("shelf_id")
+        if not shelf_id:
+            print("⚠️ No shelf_id available, using default PC2")
+            shelf_id = "PC2"
+            
+        # ดึง layout จาก Gateway
+        layout_data = await fetch_layout_from_gateway(shelf_id)
+        
+        if layout_data and layout_data.get("status") == "success":
+            gateway_layout = layout_data.get("layout", {})
+            
+            if gateway_layout:
+                # อัปเดต local database configuration
+                update_success = update_layout_from_gateway(gateway_layout)
+                
+                if update_success:
+                    print(f"✅ Layout initialized from Gateway: {len(gateway_layout)} positions")
+                    return True
+                else:
+                    print("⚠️ Failed to update local database with Gateway layout")
+                    return False
+            else:
+                print("📝 Empty layout from Gateway, using default configuration")
+                return False
+        else:
+            print("❌ Failed to fetch layout from Gateway")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error initializing layout: {e}")
+        return False
+
 async def initialize_shelf_state():
     """กู้คืน shelf state จาก Gateway เมื่อเริ่มต้นระบบ"""
     try:
@@ -100,11 +142,22 @@ async def startup_event():
     # Initialize shelf info first
     shelf_init_success = await initialize_shelf_info()
     
-    # Then initialize shelf state (requires shelf_id)
+    # Initialize layout configuration from Gateway
+    layout_init_success = await initialize_shelf_layout()
+    
+    # Then initialize shelf state (requires shelf_id and layout)
     if shelf_init_success:
         await initialize_shelf_state()
     else:
         print("⚠️ Skipping shelf state initialization due to shelf info failure")
+        
+    # แสดงสถานะการ initialization
+    print("=" * 50)
+    print("🚀 System Initialization Summary:")
+    print(f"   📋 Shelf Info: {'✅' if shelf_init_success else '❌'}")
+    print(f"   🏗️  Layout: {'✅' if layout_init_success else '❌'}")
+    print(f"   📦 State: Available after shelf info")
+    print("=" * 50)
 
 
 STATIC_PATH = pathlib.Path(__file__).parent / "static"

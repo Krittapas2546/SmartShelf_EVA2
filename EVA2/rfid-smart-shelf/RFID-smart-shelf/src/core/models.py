@@ -67,8 +67,75 @@ class ShelfComplete(BaseModel):
     place_flg: str = Field(..., example="1")
     trn_status: str = Field(..., example="1")
 
+class LotData(BaseModel):
+    """Model สำหรับข้อมูล lot ในแต่ละช่อง"""
+    lot_no: str = Field(..., example="TEST001.01")
+    tray_count: int = Field(..., example=5)
+    biz: str = Field(..., example="IS")
+
+class BlockState(BaseModel):
+    """Model สำหรับสถานะของแต่ละช่อง (block) ในชั้นวาง"""
+    level: int = Field(..., example=1)
+    block: int = Field(..., example=1) 
+    lots: List[LotData] = Field(..., example=[
+        {"lot_no": "TEST001.01", "tray_count": 5, "biz": "IS"},
+        {"lot_no": "TEST002.02", "tray_count": 3, "biz": "IS"}
+    ])
+
 class ShelfState(BaseModel):
     shelf_id: str = Field(..., example="PC2")
-    update : str = Field(..., example="1") # 0 = read only, 1 = update
-    shelf_state: dict = Field(..., example={})    # Null case update data
+    update_flg: str = Field(..., example="0")
+    shelf_state: List[BlockState] = Field(..., example=[
+        {
+            "level": 1,
+            "block": 1,
+            "lots": [
+                {"lot_no": "TEST001.01", "tray_count": 5, "biz": "IS"},
+                {"lot_no": "TEST002.02", "tray_count": 3, "biz": "IS"}
+            ]
+        },
+        {
+            "level": 4,
+            "block": 1,
+            "lots": [
+                {"lot_no": "TEST001.01", "tray_count": 5, "biz": "IS"},
+                {"lot_no": "TEST002.02", "tray_count": 3, "biz": "IS"}
+            ]
+        }
+    ])
+
+class SlotData(BaseModel):
+    """Model สำหรับข้อมูลช่องวางในชั้นวาง"""
+    capacity: int = Field(..., example=40)
+    active: bool = Field(..., example=True)
+    level: str = Field(..., example="1")
+    block: str = Field(..., example="1") 
+    position_name: str = Field(..., example="L1-B1")
+
+class LayoutRequest(BaseModel):
+    """Model สำหรับ request layout จาก Gateway"""
+    shelf_id: str = Field(..., example="PC2")
+    update_flg: str = Field(..., example="0")
+    slots: dict = Field(..., example={})
+
+class LayoutResponse(BaseModel):
+    """Model สำหรับ response layout จาก Gateway"""
+    status: str = Field(..., example="success")
+    shelf_id: str = Field(..., example="PC2")
+    layout: dict = Field(..., example={
+        "L1-B1": {
+            "capacity": 40,
+            "active": True,
+            "level": "1",
+            "block": "1", 
+            "position_name": "L1-B1"
+        },
+        "L1-B2": {
+            "capacity": 40,
+            "active": True,
+            "level": "1",
+            "block": "2",
+            "position_name": "L1-B2"
+        }
+    })
 

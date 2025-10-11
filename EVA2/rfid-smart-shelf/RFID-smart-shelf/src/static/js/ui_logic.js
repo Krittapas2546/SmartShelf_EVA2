@@ -84,18 +84,9 @@ function getLotsInCell(level, block) {
 
 // Utility: Get cell capacity (actual max trays for a specific cell)
 function getCellCapacity(level, block) {
-    // ค่าความจุเริ่มต้นสำหรับแต่ละ cell (สามารถปรับแก้ได้ตามความต้องการ)
-    const cellCapacities = {
-        '1-1': 22, // Level 1 Block 1 = 22 trays
-        '1-2': 24, // Level 1 Block 2 = 24 trays  
-        '1-3': 24, // Level 1 Block 3 = 24 trays
-        '1-4': 24, // Level 1 Block 4 = 24 trays
-        '1-5': 24, // Level 1 Block 5 = 24 trays
-        // เพิ่มข้อมูลความจุของ cell อื่นๆ ตามความต้องการ
-    };
-    
     const cellKey = `${level}-${block}`;
-    return cellCapacities[cellKey] || 24; // ถ้าไม่มีข้อมูล ใช้ 24 เป็นค่าเริ่มต้น
+    // ใช้ข้อมูลจาก Backend ที่โหลดมาแล้ว
+    return CELL_CAPACITIES[cellKey] || 24; // ถ้าไม่มีข้อมูล ใช้ 24 เป็นค่าเริ่มต้น
 }
 
 // Example usage: log lots in Level 1, Block 2
@@ -143,6 +134,9 @@ function getCellCapacity(level, block) {
         let MAX_BLOCKS = 0;
         let shelf_id = null; // เพิ่มตัวแปรสำหรับเก็บ shelf_id
 
+        // Flag เพื่อป้องกันการเรียก pending jobs ซ้ำ
+        let pendingJobsLoaded = false;
+
         // ฟังก์ชันสำหรับ Force Refresh Shelf Grid Structure
         function refreshShelfGrid() {
             console.log('🔄 Force refreshing shelf grid with config:', SHELF_CONFIG);
@@ -158,15 +152,26 @@ function getCellCapacity(level, block) {
             }
         }
 
+        // ตัวแปรสำหรับเก็บความจุรายช่อง
+        let CELL_CAPACITIES = {};
+
         // ฟังก์ชันโหลดการกำหนดค่าจาก Server
         async function loadShelfConfig() {
             try {
-                const response = await fetch('/api/shelf/config');
-                const data = await response.json();
-                SHELF_CONFIG = data.config;
-                TOTAL_LEVELS = data.total_levels;
-                MAX_BLOCKS = data.max_blocks;
-                console.log('📐 Shelf configuration loaded from server:', SHELF_CONFIG);
+                // ลองโหลด layout จาก Gateway ก่อน
+                const layoutLoaded = await loadLayoutFromGateway();
+                
+                // ถ้าโหลด layout จาก Gateway ไม่สำเร็จ ให้ใช้ config ปกติ
+                if (!layoutLoaded) {
+                    const response = await fetch('/api/shelf/config');
+                    const data = await response.json();
+                    SHELF_CONFIG = data.config;
+                    TOTAL_LEVELS = data.total_levels;
+                    MAX_BLOCKS = data.max_blocks;
+                    CELL_CAPACITIES = data.cell_capacities || {}; // เพิ่มข้อมูลความจุ
+                    console.log('📐 Shelf configuration loaded from server:', SHELF_CONFIG);
+                    console.log('📏 Cell capacities loaded:', CELL_CAPACITIES);
+                }
                 
                 // สร้าง grid structure ใหม่หลังจากโหลด config
                 if (shelfGrid) {
@@ -174,12 +179,93 @@ function getCellCapacity(level, block) {
                 }
             } catch (error) {
                 console.warn('⚠️ Failed to load shelf config from server, using local config:', SHELF_CONFIG);
+                // Fallback capacities
+                CELL_CAPACITIES = {
+                    '1-1': 22, '1-2': 24, '1-3': 24, '1-4': 24, '1-5': 24, '1-6': 24
+                };
+                console.log('📏 Using fallback cell capacities:', CELL_CAPACITIES);
                 // ใช้ config ท้องถิ่นแทน และสร้าง grid
                 if (shelfGrid) {
                     refreshShelfGrid();
                 }
             }
         }
+
+        // ฟังก์ชันโหลด layout จาก Gateway
+        async function loadLayoutFromGateway() {
+            try {
+                console.log('🔄 Loading layout from Gateway...');
+                
+                const response = await fetch('/api/shelf/layout', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        shelf_id: shelf_id || "PC2", // ใช้ shelf_id ที่มีหรือค่าเริ่มต้น
+                        update_flg: "0", // อ่านข้อมูล
+                        slots: {}
+                    })
+                });
+
+                if (response.ok) {
+                    const layoutData = await response.json();
+                    
+                    if (layoutData.status === "success" && layoutData.layout) {
+                        console.log('✅ Gateway layout loaded:', layoutData.layout);
+                        
+                        // แปลงข้อมูล Gateway layout เป็น format ที่ Frontend ใช้
+                        const gatewayLayout = layoutData.layout;
+                        const newShelfConfig = {};
+                        const newCellCapacities = {};
+                        
+                        for (const [positionKey, slotInfo] of Object.entries(gatewayLayout)) {
+                            if (!slotInfo.active) continue; // ข้าม slot ที่ไม่ active
+                            
+                            const level = parseInt(slotInfo.level);
+                            const block = parseInt(slotInfo.block);
+                            const capacity = parseInt(slotInfo.capacity);
+                            
+                            // อัปเดต shelf config
+                            if (!newShelfConfig[level]) {
+                                newShelfConfig[level] = 0;
+                            }
+                            newShelfConfig[level] = Math.max(newShelfConfig[level], block);
+                            
+                            // อัปเดต cell capacities
+                            const cellKey = `${level}-${block}`;
+                            newCellCapacities[cellKey] = capacity;
+                        }
+                        
+                        // อัปเดต global variables
+                        SHELF_CONFIG = newShelfConfig;
+                        CELL_CAPACITIES = newCellCapacities;
+                        TOTAL_LEVELS = Object.keys(newShelfConfig).length;
+                        MAX_BLOCKS = Math.max(...Object.values(newShelfConfig));
+                        
+                        console.log('📊 Updated config from Gateway:', {
+                            SHELF_CONFIG,
+                            CELL_CAPACITIES,
+                            TOTAL_LEVELS,
+                            MAX_BLOCKS
+                        });
+                        
+                        // แสดง notification
+                        showNotification(`Layout โหลดจาก Gateway สำเร็จ (${Object.keys(gatewayLayout).length} ช่อง)`, 'success');
+                        
+                        return true;
+                    }
+                }
+                
+                console.log('⚠️ Failed to load layout from Gateway, using local config');
+                return false;
+                
+            } catch (error) {
+                console.error('❌ Error loading layout from Gateway:', error);
+                return false;
+            }
+        }
+        
         // 🔼 END OF FLEXIBLE CONFIGURATION 🔼
 
         // 🔽 ADD THIS FUNCTION 🔽
@@ -707,7 +793,7 @@ function getCellCapacity(level, block) {
                     if (lots.length > 0) {
                         // คำนวณเปอร์เซ็นต์การใช้งานของ cell
                         const totalTrayInCell = lots.reduce((sum, lot) => sum + (parseInt(lot.tray_count) || 1), 0);
-                        const maxCapacity = 24; // ความจุสูงสุดของ cell
+                        const maxCapacity = getCellCapacity(level, block); // ใช้ความจุจริงของ cell
                         const usagePercentage = Math.round((totalTrayInCell / maxCapacity) * 100);
                         
                         console.log(`🟫 [Grid] Lots in cell (Level: ${level}, Block: ${block}) [index 0 = bottom, last = top] - Usage: ${usagePercentage}% (${totalTrayInCell}/${maxCapacity}):`);
@@ -722,61 +808,77 @@ function getCellCapacity(level, block) {
                     const cell = document.getElementById(cellId);
                     if (!cell) return;
 
-            // --- Visual stacked lots (FIFO bottom-to-top: index 0 = bottom, last = top) ---
-            const safeLots = Array.isArray(lots) ? lots : [];
-            let totalTray = safeLots.reduce((sum, lot) => sum + (parseInt(lot.tray_count) || 1), 0);
-            totalTray = Math.max(totalTray, 1);
-            
-            // ปรับการคำนวณขนาดให้เหมาะสมกับ cell ที่เล็กลง
-            const maxCellHeight = 66; // ความสูงสูงสุดของ cell (70px - padding 4px)
-            
-            // Render lots in REVERSE order (last to first) เพื่อให้แสดงผลถูกต้อง
-            // เนื่องจาก flex-end จะแสดงจากล่างขึ้นบน การใส่จากท้ายไปหน้าจะทำให้ลำดับถูกต้อง
-            for (let idx = safeLots.length - 1; idx >= 0; idx--) {
-                const lot = safeLots[idx];
-                const lotDiv = document.createElement('div');
-                let isTarget = false;
-                if (activeJob && String(activeJob.level) === String(level) && String(activeJob.block) === String(block)) {
-                    isTarget = (String(lot.lot_no) === String(activeJob.lot_no));
-                }
-                lotDiv.className = 'stacked-lot' + (isTarget ? ' target-lot' : '');
-                
-                // คำนวณความสูงตาม tray_count แบบสัดส่วนที่ชัดเจน
-                const trayCount = parseInt(lot.tray_count) || 1;
-                const maxCapacity = 24;
-                const maxCellHeight = 85; // ใช้ความสูงสูงสุดที่เหมาะสมกับ cell height 90px
-                const heightRatio = trayCount / maxCapacity;
-                const trayHeight = Math.max(heightRatio * maxCellHeight, 2); // ขั้นต่ำ 2px เพื่อให้เห็น
-                lotDiv.style.height = Math.round(trayHeight) + 'px';
-                
-                // เก็บข้อมูลใน title สำหรับ tooltip เท่านั้น
-                lotDiv.title = `Lot: ${lot.lot_no}, Tray: ${trayCount}, Height: ${Math.round(trayHeight)}px`;
-                
-                // ไม่ใส่ข้อความ (แสดงเป็นกล่องสีเทาเท่านั้น)
-                
-                cell.appendChild(lotDiv);
-            }
-
-                    // --- State classes for selection/error ---
-                    let isSelected = false;
-                    if (activeJob) {
-                        const isTargetCell = (String(activeJob.level) === String(level) && String(activeJob.block) === String(block));
-                        if (isTargetCell) {
-                            cell.classList.add('selected-task');
-                            isSelected = true;
+                    // --- Visual stacked lots (FIFO bottom-to-top: index 0 = bottom, last = top) ---
+                    const safeLots = Array.isArray(lots) ? lots : [];
+                    let totalTray = safeLots.reduce((sum, lot) => sum + (parseInt(lot.tray_count) || 1), 0);
+                    totalTray = Math.max(totalTray, 1);
+                    
+                    // ปรับการคำนวณขนาดให้เหมาะสมกับ cell ที่เล็กลง
+                    const maxCellHeight = 66; // ความสูงสูงสุดของ cell (70px - padding 4px)
+                    
+                    // Render lots in REVERSE order (last to first) เพื่อให้แสดงผลถูกต้อง
+                    // เนื่องจาก flex-end จะแสดงจากล่างขึ้นบน การใส่จากท้ายไปหน้าจะทำให้ลำดับถูกต้อง
+                    for (let idx = safeLots.length - 1; idx >= 0; idx--) {
+                        const lot = safeLots[idx];
+                        const lotDiv = document.createElement('div');
+                        let isTarget = false;
+                        if (activeJob && String(activeJob.level) === String(level) && String(activeJob.block) === String(block)) {
+                            isTarget = (String(lot.lot_no) === String(activeJob.lot_no));
                         }
-                        if (wrongLevel === Number(level) && wrongBlock === Number(block)) {
-                            cell.classList.add('wrong-location');
-                            cell.classList.remove('selected-task');
-                            isSelected = false;
-                        }
+                        lotDiv.className = 'stacked-lot' + (isTarget ? ' target-lot' : '');
+                        
+                        // คำนวณความสูงตาม tray_count แบบสัดส่วนที่ชัดเจน
+                        const trayCount = parseInt(lot.tray_count) || 1;
+                        const maxCapacity = 24;
+                        const maxCellHeight = 85; // ใช้ความสูงสูงสุดที่เหมาะสมกับ cell height 90px
+                        const heightRatio = trayCount / maxCapacity;
+                        const trayHeight = Math.max(heightRatio * maxCellHeight, 2); // ขั้นต่ำ 2px เพื่อให้เห็น
+                        lotDiv.style.height = Math.round(trayHeight) + 'px';
+                        
+                        // เก็บข้อมูลใน title สำหรับ tooltip เท่านั้น
+                        lotDiv.title = `Lot: ${lot.lot_no}, Tray: ${trayCount}, Height: ${Math.round(trayHeight)}px`;
+                        
+                        // ไม่ใส่ข้อความ (แสดงเป็นกล่องสีเทาเท่านั้น)
+                        
+                        cell.appendChild(lotDiv);
                     }
-                    if (!isSelected && !(wrongLevel === Number(level) && wrongBlock === Number(block)) && Array.isArray(lots) && lots.length > 0) {
+
+                    // เพิ่ม has-item class ถ้ามีของ
+                    if (Array.isArray(lots) && lots.length > 0) {
                         cell.classList.add('has-item');
                     }
                 });
             } else {
                 console.error('❌ shelfState is not an array:', shelfState);
+            }
+
+            // --- Apply activeJob และ error state classes ให้ทุก cell หลังจาก render lots แล้ว ---
+            if (activeJob) {
+                // ตรวจสอบทุก cell ในชั้นวาง
+                for (let level = 1; level <= TOTAL_LEVELS; level++) {
+                    const blocksInThisLevel = SHELF_CONFIG[level];
+                    for (let block = 1; block <= blocksInThisLevel; block++) {
+                        const cellId = `cell-${level}-${block}`;
+                        const cell = document.getElementById(cellId);
+                        if (!cell) continue;
+
+                        const isTargetCell = (String(activeJob.level) === String(level) && String(activeJob.block) === String(block));
+                        const isWrongCell = (wrongLevel === Number(level) && wrongBlock === Number(block));
+
+                        // เพิ่ม selected-task class สำหรับ target cell
+                        if (isTargetCell) {
+                            cell.classList.add('selected-task');
+                            console.log(`🎯 Added selected-task to L${level}B${block}`);
+                        }
+
+                        // เพิ่ม wrong-location class สำหรับ wrong cell และลบ selected-task ออก
+                        if (isWrongCell) {
+                            cell.classList.add('wrong-location');
+                            cell.classList.remove('selected-task');
+                            console.log(`❌ Added wrong-location to L${level}B${block}`);
+                        }
+                    }
+                }
             }
         }
 
@@ -1861,17 +1963,6 @@ function getCellCapacity(level, block) {
                 setupWebSocket();
                 console.log('✅ WebSocket setup completed');
                 
-                // เพิ่มการโหลดงานจาก Gateway หลัง WebSocket setup
-                console.log('⏳ Loading pending jobs after startup...');
-                try {
-                    const pendingResult = await loadPendingJobsFromGateway();
-                    if (pendingResult && pendingResult.success) {
-                        console.log(`✅ Additional startup load: ${pendingResult.added}/${pendingResult.total} งาน`);
-                    }
-                } catch (pendingError) {
-                    console.warn('⚠️ Could not load additional pending jobs on startup:', pendingError);
-                }
-                
                 // Sync queue จาก backend เพื่อให้แน่ใจว่าข้อมูลตรงกัน
                 console.log('⏳ Syncing queue from backend...');
                 try {
@@ -2908,6 +2999,18 @@ async function loadPendingJobsFromGateway() {
     console.log('📍 Current shelf_id:', shelf_id);
     console.log('📍 Function called at:', new Date().toISOString());
     
+    // ตรวจสอบ flag เพื่อป้องกันการเรียกซ้ำ
+    if (pendingJobsLoaded) {
+        console.log('⚠️ งานที่ค้างอยู่ถูกโหลดไปแล้ว, ข้ามการโหลดซ้ำ');
+        return {
+            success: true,
+            error: 'Already loaded',
+            added: 0,
+            skipped: 0,
+            total: 0
+        };
+    }
+    
     if (!shelf_id) {
         console.warn('⚠️ ไม่มี shelf_id สำหรับดึงงาน');
         return { success: false, error: 'No shelf_id available' };
@@ -2952,12 +3055,16 @@ async function loadPendingJobsFromGateway() {
                 // รีเฟรช UI (เนื่องจาก API ส่ง WebSocket broadcast แล้ว)
                 renderAll();
                 
+                // ตั้ง flag ว่าโหลดแล้ว
+                pendingJobsLoaded = true;
                 return { success: true, added: loadedCount, skipped: skippedCount, total: totalPending };
             } else {
                 console.log('ℹ️ ไม่มีงานใหม่ที่ต้องเพิ่ม');
                 if (totalPending > 0) {
                     console.log(`ℹ️ งานทั้งหมด ${totalPending} งานมีอยู่ใน queue แล้ว`);
                 }
+                // ตั้ง flag ว่าโหลดแล้ว (แม้จะไม่มีงานใหม่)
+                pendingJobsLoaded = true;
                 return { success: true, added: 0, skipped: skippedCount, total: totalPending };
             }
         } else {
@@ -3223,9 +3330,69 @@ async function autoSyncAfterJobComplete(completedJobData = null) {
     }
 }
 
+/**
+ * ดึงข้อมูลความจุและสถานะการใช้งานของช่องเฉพาะ
+ */
+async function getCellCapacityInfo(level, block) {
+    try {
+        const response = await fetch(`/api/shelf/capacity/${level}/${block}`);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        const result = await response.json();
+        console.log(`📏 Cell L${level}B${block} capacity info:`, result);
+        return result;
+        
+    } catch (error) {
+        console.error(`❌ Failed to get capacity info for L${level}B${block}:`, error);
+        // Fallback to local calculation
+        const capacity = getCellCapacity(level, block);
+        const lots = getLotsInCell(level, block);
+        const currentTray = lots.reduce((sum, lot) => sum + (lot.tray_count || 1), 0);
+        
+        return {
+            level: level,
+            block: block,
+            max_capacity: capacity,
+            current_tray: currentTray,
+            available_space: capacity - currentTray,
+            usage_percentage: Math.round((currentTray / capacity) * 100),
+            is_full: currentTray >= capacity,
+            error: error.message
+        };
+    }
+}
+
+/**
+ * อัปเดตความจุทุกช่องจาก Backend
+ */
+async function refreshCellCapacities() {
+    try {
+        console.log('🔄 Refreshing cell capacities from Backend...');
+        await loadShelfConfig(); // โหลด config ใหม่ซึ่งรวมความจุด้วย
+        console.log('✅ Cell capacities refreshed successfully');
+        renderAll(); // Re-render UI
+    } catch (error) {
+        console.error('❌ Failed to refresh cell capacities:', error);
+    }
+}
+
+/**
+ * รีเซ็ต flag การโหลดงานที่ค้างอยู่ (สำหรับกรณีพิเศษ)
+ */
+function resetPendingJobsFlag() {
+    pendingJobsLoaded = false;
+    console.log('🔄 Reset pending jobs flag - สามารถโหลดงานที่ค้างอยู่ใหม่ได้');
+}
+
 // ทำให้ function เป็น global เพื่อเรียกจาก console ได้
 window.loadPendingJobsFromGateway = loadPendingJobsFromGateway;
 window.syncQueueFromBackend = syncQueueFromBackend;
 window.restoreShelfStateFromServer = restoreShelfStateFromServer;
 window.syncShelfStateToServer = syncShelfStateToServer;
 window.autoSyncAfterJobComplete = autoSyncAfterJobComplete;
+window.getCellCapacityInfo = getCellCapacityInfo;
+window.refreshCellCapacities = refreshCellCapacities;
+window.resetPendingJobsFlag = resetPendingJobsFlag;
+window.loadLayoutFromGateway = loadLayoutFromGateway;

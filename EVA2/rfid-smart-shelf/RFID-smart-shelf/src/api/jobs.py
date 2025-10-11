@@ -12,9 +12,9 @@ from datetime import datetime
 from core.led_controller import set_led
 
 # --- Import จากไฟล์ที่เราสร้างขึ้น ---
-from core.models import JobRequest, ErrorRequest, LEDPositionRequest, LEDPositionsRequest, LEDClearAndBatch, LMSCheckShelfRequest, LMSCheckShelfResponse, ShelfComplete, ShelfState
+from core.models import JobRequest, ErrorRequest, LEDPositionRequest, LEDPositionsRequest, LEDClearAndBatch, LMSCheckShelfRequest, LMSCheckShelfResponse, ShelfComplete, ShelfState, BlockState, LotData, LayoutRequest, LayoutResponse, SlotData
 from core.database import (
-    DB, get_job_by_id, get_lots_in_position, add_lot_to_position, remove_lot_from_position, update_lot_quantity, validate_position, get_shelf_info, SHELF_CONFIG, update_lot_biz
+    DB, get_job_by_id, get_lots_in_position, add_lot_to_position, remove_lot_from_position, update_lot_quantity, validate_position, get_shelf_info, SHELF_CONFIG, update_lot_biz, get_cell_capacity, update_layout_from_gateway, get_layout_info, is_layout_loaded_from_gateway, log_current_layout, get_layout_status
 )
 from core.lms_config import LMS_BASE_URL, LMS_ENDPOINT, LMS_API_KEY, LMS_TIMEOUT
 from api.websockets import manager # <-- impor        },
@@ -48,6 +48,94 @@ def get_actual_local_ip():
             return local_ip
         except:
             return "192.168.1.100"  #
+
+# === Gateway Layout Functions ===
+async def fetch_layout_from_gateway(shelf_id: str = None):
+    """
+    ดึงข้อมูล layout (ความจุและการกำหนดค่าช่องวาง) จาก Gateway
+    """
+    try:
+        if not shelf_id:
+            shelf_id = GLOBAL_SHELF_INFO.get("shelf_id", "PC2")
+        
+        gateway_payload = {
+            "shelf_id": shelf_id,
+            "update_flg": "0",  # อ่านข้อมูล
+            "slots": {}
+        }
+        
+        headers = {
+            "Accept": "application/json", 
+            "Content-Type": "application/json"
+        }
+        
+        print(f"🔄 Fetching layout from Gateway: {GATEWAY_BASE_URL}/IoTManagement/shelf/layout")
+        print(f"📦 Payload: {gateway_payload}")
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{GATEWAY_BASE_URL}/IoTManagement/shelf/layout",
+                json=gateway_payload,
+                headers=headers
+            )
+            
+            print(f"📡 Gateway Response Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                response_data = response.json()
+                print(f"✅ Layout fetched successfully")
+                print(f"📦 Layout data: {response_data}")
+                
+                return response_data
+            else:
+                print(f"⚠️ Gateway layout fetch failed: {response.status_code} - {response.text}")
+                return None
+                
+    except Exception as e:
+        print(f"⚠️ Layout fetch error: {e}")
+        return None
+
+async def sync_layout_to_gateway(layout_data: dict, shelf_id: str = None):
+    """
+    ส่งข้อมูล layout ไปบันทึกที่ Gateway (ไว้สำหรับอนาคต)
+    """
+    try:
+        if not shelf_id:
+            shelf_id = GLOBAL_SHELF_INFO.get("shelf_id", "PC2")
+        
+        gateway_payload = {
+            "shelf_id": shelf_id,
+            "update_flg": "1",  # เขียนข้อมูล
+            "slots": layout_data
+        }
+        
+        headers = {
+            "Accept": "application/json", 
+            "Content-Type": "application/json"
+        }
+        
+        print(f"🔄 Syncing layout to Gateway: {GATEWAY_BASE_URL}/IoTManagement/shelf/layout")
+        print(f"📦 Payload: {gateway_payload}")
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{GATEWAY_BASE_URL}/IoTManagement/shelf/layout",
+                json=gateway_payload,
+                headers=headers
+            )
+            
+            print(f"📡 Gateway Response Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                print(f"✅ Layout synced successfully")
+                return True
+            else:
+                print(f"⚠️ Gateway layout sync failed: {response.status_code} - {response.text}")
+                return False
+                
+    except Exception as e:
+        print(f"⚠️ Layout sync error: {e}")
+        return False
 
 # === Gateway Logging Functions ===
 async def log_to_gateway(event_type: str, event_data: dict, shelf_id: str = None):
@@ -628,7 +716,65 @@ def get_shelf_state():
 @router.get("/api/shelf/config", tags=["Jobs"])
 def get_shelf_config():
     """ดึงข้อมูลการกำหนดค่าของชั้นวาง"""
-    return get_shelf_info()
+    config = get_shelf_info()
+    # เพิ่มข้อมูลความจุรายช่อง
+    config["cell_capacities"] = {}
+    for level, num_blocks in SHELF_CONFIG.items():
+        for block in range(1, num_blocks + 1):
+            cell_key = f"{level}-{block}"
+            capacity = get_cell_capacity(level, block)
+            config["cell_capacities"][cell_key] = capacity
+    return config
+
+@router.get("/api/shelf/layout/status", tags=["Shelf Layout Management"])
+def get_layout_status_api():
+    """
+    ดึงสถานะ layout ปัจจุบัน - แสดงว่าใช้ข้อมูลจาก Gateway หรือ fallback
+    """
+    try:
+        # Log detailed layout info to console/logs
+        log_current_layout()
+        
+        # Return compact status for API response
+        status = get_layout_status()
+        
+        return {
+            "status": "success",
+            "layout_status": status,
+            "message": f"Layout loaded from {'Gateway' if status['gateway_loaded'] else 'fallback configuration'}"
+        }
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": f"Failed to get layout status: {str(e)}"
+            }
+        )
+
+@router.get("/api/shelf/capacity/{level}/{block}", tags=["Jobs"])
+def get_cell_capacity_api(level: int, block: int):
+    """ดึงความจุของช่องเฉพาะ"""
+    if not validate_position(level, block):
+        return {
+            "error": "Invalid position",
+            "message": f"Position L{level}B{block} does not exist in shelf configuration"
+        }
+    
+    capacity = get_cell_capacity(level, block)
+    lots = get_lots_in_position(level, block)
+    current_tray = sum(lot.get("tray_count", 0) for lot in lots)
+    
+    return {
+        "level": level,
+        "block": block,
+        "max_capacity": capacity,
+        "current_tray": current_tray,
+        "available_space": capacity - current_tray,
+        "usage_percentage": round((current_tray / capacity) * 100, 1) if capacity > 0 else 0,
+        "is_full": current_tray >= capacity
+    }
 
 @router.get("/api/shelf/position/{level}/{block}", tags=["Jobs"])
 def get_position_info(level: int, block: int):
@@ -1233,6 +1379,108 @@ async def load_pending_jobs_into_queue():
             }
         )
 
+@router.post("/api/shelf/layout", tags=["Shelf Layout Management"])
+async def manage_shelf_layout(layout_request: LayoutRequest):
+    """
+    จัดการ layout ของชั้นวาง - ดึงข้อมูลจาก Gateway และอัปเดต local database
+    
+    Parameters:
+    - shelf_id: รหัสชั้นวาง (เช่น "PC2")
+    - update_flg: "0" = อ่านข้อมูล, "1" = เขียนข้อมูล
+    - slots: ข้อมูล layout (ใช้เมื่อ update_flg = "1")
+    
+    Returns:
+    - Layout configuration พร้อมข้อมูล capacity และ active status
+    """
+    try:
+        shelf_id = layout_request.shelf_id
+        update_mode = layout_request.update_flg
+        slots_data = layout_request.slots
+        
+        print(f"📋 Layout Management: ID={shelf_id}, Mode={update_mode}")
+        
+        if update_mode == "0":
+            # Read mode - ดึงข้อมูลจาก Gateway
+            print(f"📖 Reading layout from Gateway...")
+            
+            layout_data = await fetch_layout_from_gateway(shelf_id)
+            
+            if layout_data and layout_data.get("status") == "success":
+                gateway_layout = layout_data.get("layout", {})
+                
+                # อัปเดต local database configuration
+                from core.database import update_layout_from_gateway
+                update_success = update_layout_from_gateway(gateway_layout)
+                
+                if update_success:
+                    print(f"✅ Local database updated with Gateway layout")
+                    
+                    # Broadcast layout update to WebSocket clients  
+                    try:
+                        await manager.broadcast(json.dumps({
+                            "type": "layout_updated",
+                            "payload": {
+                                "shelf_id": shelf_id,
+                                "layout": gateway_layout,
+                                "source": "gateway_fetch"
+                            }
+                        }))
+                        print(f"📡 Broadcasted layout update to WebSocket clients")
+                    except Exception as broadcast_error:
+                        print(f"⚠️ WebSocket broadcast failed: {broadcast_error}")
+                
+                return {
+                    "status": "success",
+                    "shelf_id": shelf_id,
+                    "update_flg": "0",
+                    "layout": gateway_layout,
+                    "local_update": update_success,
+                    "message": f"Layout fetched from Gateway for shelf {shelf_id}"
+                }
+            else:
+                return JSONResponse(
+                    status_code=502,
+                    content={
+                        "status": "error",
+                        "shelf_id": shelf_id,
+                        "message": "Failed to fetch layout from Gateway",
+                        "gateway_response": layout_data
+                    }
+                )
+        
+        elif update_mode == "1":
+            # Write mode - ส่งข้อมูลไป Gateway (Future feature)
+            print(f"💾 Writing layout to Gateway...")
+            
+            sync_success = await sync_layout_to_gateway(slots_data, shelf_id)
+            
+            return {
+                "status": "success" if sync_success else "error",
+                "shelf_id": shelf_id,
+                "update_flg": "1",
+                "slots": slots_data,
+                "gateway_sync": sync_success,
+                "message": "Layout synced to Gateway" if sync_success else "Gateway sync failed"
+            }
+        
+        else:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "message": "Invalid update_flg. Use '0' for read or '1' for write"
+                }
+            )
+            
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": str(e)
+            }
+        )
+
 @router.get("/ShelfName", tags=["Shelf Operations"])
 async def get_shelf_info_endpoint():
     """
@@ -1403,16 +1651,20 @@ async def restore_shelf_state_from_gateway():
         return None
 
 @router.post("/api/shelf/shelfItem", tags=["Shelf State Management"])
-async def manage_shelf_state(request: Request):
+async def manage_shelf_state(shelf_state_request: ShelfState):
     """
     จัดการ shelf state - รองรับทั้งการอ่าน (update_flg="0") และการเขียน (update_flg="1")
     ใช้เชื่อมต่อกับ Gateway API รูปแบบใหม่
+    
+    Example Values:
+    - shelf_id: "PC2"
+    - update_flg: "0" (read) or "1" (write)
+    - shelf_state: Array of BlockState objects with lots data
     """
     try:
-        payload = await request.json()
-        shelf_id = payload.get("shelf_id")
-        update_mode = payload.get("update_flg")  # เปลี่ยนจาก update เป็น update_flg
-        shelf_state_data = payload.get("shelf_state", [])
+        shelf_id = shelf_state_request.shelf_id
+        update_mode = shelf_state_request.update_flg  
+        shelf_state_data = shelf_state_request.shelf_state
         
         print(f"📋 Shelf State Management: ID={shelf_id}, Mode={update_mode}")
         
@@ -1521,22 +1773,43 @@ async def manage_shelf_state(request: Request):
                     for block in range(1, num_blocks + 1):
                         DB["shelf_state"].append([level, block, []])
                 
-                # อัปเดตด้วยข้อมูลใหม่
+                # อัปเดตด้วยข้อมูลใหม่ (แปลง Pydantic models เป็น dict)
                 for cell_data in shelf_state_data:
-                    level = cell_data.get("level")
-                    block = cell_data.get("block")
-                    lots = cell_data.get("lots", [])
+                    # แปลง BlockState object เป็น dict
+                    if hasattr(cell_data, 'dict'):
+                        cell_dict = cell_data.dict()
+                    else:
+                        cell_dict = cell_data
+                        
+                    level = cell_dict.get("level")
+                    block = cell_dict.get("block")
+                    lots = cell_dict.get("lots", [])
+                    
+                    # แปลง LotData objects เป็น dict ถ้าจำเป็น
+                    lots_dict = []
+                    for lot in lots:
+                        if hasattr(lot, 'dict'):
+                            lots_dict.append(lot.dict())
+                        else:
+                            lots_dict.append(lot)
                     
                     # หา cell ที่ตรงกันใน DB
                     for i, (l, b, existing_lots) in enumerate(DB["shelf_state"]):
                         if l == level and b == block:
-                            DB["shelf_state"][i] = [level, block, lots]
+                            DB["shelf_state"][i] = [level, block, lots_dict]
                             break
                 
                 print(f"✅ Local DB updated with new state")
             
-            # ส่งไป Gateway
-            sync_success = await sync_shelf_state_to_gateway(shelf_state_data)
+            # ส่งไป Gateway (แปลง Pydantic models เป็น dict format)
+            shelf_state_dict = []
+            for block_state in shelf_state_data:
+                if hasattr(block_state, 'dict'):
+                    shelf_state_dict.append(block_state.dict())
+                else:
+                    shelf_state_dict.append(block_state)
+            
+            sync_success = await sync_shelf_state_to_gateway(shelf_state_dict)
             
             # Broadcast shelf state update to WebSocket clients
             if sync_success:
@@ -1563,7 +1836,7 @@ async def manage_shelf_state(request: Request):
                 "status": "success" if sync_success else "error",
                 "shelf_id": shelf_id,
                 "update_flg": "1", 
-                "shelf_state": shelf_state_data,
+                "shelf_state": shelf_state_dict,
                 "gateway_sync": sync_success,
                 "message": "Shelf state updated and synced" if sync_success else "Gateway sync failed"
             }
