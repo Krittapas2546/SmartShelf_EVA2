@@ -1885,6 +1885,19 @@ function getCellCapacity(level, block) {
                     console.warn('⚠️ Could not sync queue on startup:', syncError);
                 }
                 
+                // 🔽 RESTORE SHELF STATE FROM SERVER/GATEWAY 🔽
+                console.log('⏳ Restoring shelf state from server/Gateway...');
+                try {
+                    const restoreResult = await restoreShelfStateFromServer();
+                    if (restoreResult.success) {
+                        console.log(`✅ Shelf state restored: ${restoreResult.positions_count} positions`);
+                    } else {
+                        console.warn('⚠️ Shelf state restore failed:', restoreResult.error);
+                    }
+                } catch (restoreError) {
+                    console.warn('⚠️ Could not restore shelf state on startup:', restoreError);
+                }
+                
                 console.log('⏳ Rendering all components...');
                 renderAll();
                 console.log('✅ Initial setup completed successfully');
@@ -2000,7 +2013,19 @@ function getCellCapacity(level, block) {
             clearPersistentNotifications(); // Clear persistent notifications on job completion
             localStorage.removeItem(ACTIVE_JOB_KEY);
             renderAll();
-            showNotification(`✅ Job completed for Lot ${data.payload.lot_no || 'Unknown'}!`, 'success');                            fetch('/api/led/clear', { method: 'POST' });
+            showNotification(`✅ Job completed for Lot ${data.payload.lot_no || 'Unknown'}!`, 'success');
+            fetch('/api/led/clear', { method: 'POST' });
+            
+            // 🔽 AUTO-SYNC SHELF STATE AFTER JOB COMPLETION 🔽
+            // ไม่ต้อง await เพื่อไม่ให้ block UI
+            autoSyncAfterJobComplete({
+                lot_no: data.payload.lot_no,
+                action: data.payload.action,
+                level: data.payload.level,
+                block: data.payload.block
+            }).catch(error => {
+                console.error('❌ Auto-sync failed after job completion:', error);
+            });
                             break;
                         case "job_warning":
                             console.log('⚠️ Received job warning:', data.payload);
@@ -2990,6 +3015,217 @@ async function syncQueueFromBackend() {
     }
 }
 
+// --- Shelf State Management Functions ---
+
+/**
+ * กู้คืน shelf state จาก server ผ่าน API endpoint
+ * ใช้เมื่อเริ่มต้นระบบหรือต้องการ sync กับ Gateway
+ */
+async function restoreShelfStateFromServer() {
+    try {
+        console.log('🔄 Restoring shelf state from server...');
+        
+        // ดึง shelf_id จาก server
+        const shelfInfoResponse = await fetch('/ShelfName');
+        if (!shelfInfoResponse.ok) {
+            throw new Error('Failed to get shelf info');
+        }
+        
+        const shelfInfo = await shelfInfoResponse.json();
+        const shelf_id = shelfInfo.shelf_id;
+        
+        if (!shelf_id || shelf_id === 'ERROR') {
+            throw new Error('Invalid shelf_id from server');
+        }
+        
+        // เรียก API เพื่อ restore shelf state
+        const response = await fetch('/api/shelf/shelfItem', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                shelf_id: shelf_id,
+                update_flg: "0", // เปลี่ยนจาก update เป็น update_flg 
+                shelf_state: [] // empty array for read
+            })
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+        }
+        
+        const result = await response.json();
+        console.log('📦 Shelf state restored:', result);
+        
+        // Gateway ส่งข้อมูลมาใน result.data หรือ result.shelf_state
+        const serverState = result.shelf_state || result.data;
+        
+        if (result.status === 'success' && serverState) {
+            let finalState = [];
+            
+            // ตรวจสอบว่าเป็น array หรือไม่
+            if (Array.isArray(serverState)) {
+                // ข้อมูลจาก Gateway มาในรูป array แล้ว [{level: 1, block: 1, lots: [...]}]
+                finalState = serverState;
+                console.log('📦 Using array format from Gateway:', finalState);
+            } else if (typeof serverState === 'object') {
+                // ถ้าเป็น object ให้แปลงเป็น array
+                finalState = [];
+                for (const [positionKey, positionData] of Object.entries(serverState)) {
+                    if (positionData.level && positionData.block) {
+                        finalState.push({
+                            level: positionData.level,
+                            block: positionData.block,
+                            lots: positionData.lots || []
+                        });
+                    }
+                }
+                console.log('📦 Converted object to array format:', finalState);
+            }
+            
+            // บันทึกลง localStorage
+            localStorage.setItem(GLOBAL_SHELF_STATE_KEY, JSON.stringify(finalState));
+            
+            console.log(`✅ Shelf state restored: ${finalState.length} positions updated`);
+            
+            // Re-render UI
+            renderAll();
+            
+            return {
+                success: true,
+                positions_count: finalState.length,
+                message: 'Shelf state restored successfully'
+            };
+        } else {
+            throw new Error('Invalid response format from server');
+        }
+        
+    } catch (error) {
+        console.error('❌ Failed to restore shelf state:', error);
+        showNotification(`⚠️ Failed to restore shelf state: ${error.message}`, 'warning');
+        
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+/**
+ * ส่ง current shelf state ไปบันทึกที่ server/Gateway
+ * ใช้เมื่อมีการเปลี่ยนแปลง state ที่ต้องการ sync
+ */
+async function syncShelfStateToServer() {
+    try {
+        console.log('🔄 Syncing shelf state to server...');
+        
+        // ดึง current state จาก localStorage
+        const currentState = JSON.parse(localStorage.getItem(GLOBAL_SHELF_STATE_KEY) || '[]');
+        
+        if (currentState.length === 0) {
+            throw new Error('No shelf state data to sync');
+        }
+        
+        // ดึง shelf_id
+        const shelfInfoResponse = await fetch('/ShelfName');
+        if (!shelfInfoResponse.ok) {
+            throw new Error('Failed to get shelf info');
+        }
+        
+        const shelfInfo = await shelfInfoResponse.json();
+        const shelf_id = shelfInfo.shelf_id;
+        
+        if (!shelf_id || shelf_id === 'ERROR') {
+            throw new Error('Invalid shelf_id from server');
+        }
+        
+        // ส่งข้อมูลในรูป array format ตรงๆ (ไม่ต้องแปลง)
+        // currentState อยู่ในรูป [{level: 1, block: 1, lots: [...]}] อยู่แล้ว
+        // ส่งเฉพาะ position ที่มีของ
+        const arrayFormat = currentState.filter(position => position.lots && position.lots.length > 0);
+        
+        console.log('📦 Sending shelf state array:', arrayFormat);
+        
+        // ส่งไป server
+        const response = await fetch('/api/shelf/shelfItem', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                shelf_id: shelf_id,
+                update_flg: "1", // เปลี่ยนจาก update เป็น update_flg
+                shelf_state: arrayFormat
+            })
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+        }
+        
+        const result = await response.json();
+        console.log('📡 Shelf state sync result:', result);
+        
+        if (result.status === 'success') {
+            console.log(`✅ Shelf state synced successfully. Gateway sync: ${result.gateway_sync ? '✅' : '❌'}`);
+            
+            return {
+                success: true,
+                gateway_sync: result.gateway_sync,
+                message: 'Shelf state synced successfully'
+            };
+        } else {
+            throw new Error(result.message || 'Sync failed');
+        }
+        
+    } catch (error) {
+        console.error('❌ Failed to sync shelf state:', error);
+        showNotification(`⚠️ Failed to sync shelf state: ${error.message}`, 'warning');
+        
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+/**
+ * Auto-sync shelf state หลังจาก job completion
+ * เรียกโดย WebSocket หรือ manual trigger
+ */
+async function autoSyncAfterJobComplete(completedJobData = null) {
+    try {
+        console.log('🔄 Auto-syncing shelf state after job completion...');
+        
+        if (completedJobData) {
+            console.log(`📋 Job completed: ${completedJobData.lot_no} (${completedJobData.action})`);
+        }
+        
+        // รอสักครู่ให้ local state อัปเดตเสร็จก่อน
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Sync to server/Gateway
+        const syncResult = await syncShelfStateToServer();
+        
+        if (syncResult.success) {
+            showNotification(
+                `✅ Shelf state synced ${syncResult.gateway_sync ? 'to Gateway' : 'locally'}`, 
+                'success'
+            );
+        }
+        
+        return syncResult;
+        
+    } catch (error) {
+        console.error('❌ Auto-sync failed:', error);
+        return { success: false, error: error.message };
+    }
+}
+
 // ทำให้ function เป็น global เพื่อเรียกจาก console ได้
 window.loadPendingJobsFromGateway = loadPendingJobsFromGateway;
 window.syncQueueFromBackend = syncQueueFromBackend;
+window.restoreShelfStateFromServer = restoreShelfStateFromServer;
+window.syncShelfStateToServer = syncShelfStateToServer;
+window.autoSyncAfterJobComplete = autoSyncAfterJobComplete;

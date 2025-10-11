@@ -37,6 +37,56 @@ async def initialize_shelf_info():
         print(f"❌ Error initializing shelf info: {e}")
         return False
 
+async def initialize_shelf_state():
+    """กู้คืน shelf state จาก Gateway เมื่อเริ่มต้นระบบ"""
+    try:
+        print("🔄 Initializing shelf state from Gateway...")
+        
+        # Import ฟังก์ชันที่จำเป็น
+        from api.jobs import restore_shelf_state_from_gateway, GLOBAL_SHELF_INFO
+        from core.database import DB
+        
+        # ตรวจสอบว่ามี shelf_id แล้วหรือไม่
+        if not GLOBAL_SHELF_INFO.get("shelf_id"):
+            print("⚠️ No shelf_id available, skipping shelf state restore")
+            return False
+            
+        # กู้คืนจาก Gateway
+        restored_state = await restore_shelf_state_from_gateway()
+        
+        if restored_state and isinstance(restored_state, dict):
+            print(f"✅ Shelf state restored from Gateway: {len(restored_state)} positions")
+            
+            # แปลง Gateway format เป็น local DB format
+            # สมมติว่า restored_state = {"L1B1": {...}, "L1B2": {...}}
+            restored_count = 0
+            for position_key, position_data in restored_state.items():
+                # Parse position (L1B1 -> level=1, block=1)
+                import re
+                match = re.match(r'L(\d+)B(\d+)', position_key)
+                if match:
+                    level = int(match.group(1))
+                    block = int(match.group(2))
+                    lots = position_data.get("lots", [])
+                    
+                    # อัปเดต local DB
+                    for cell in DB["shelf_state"]:
+                        if cell[0] == level and cell[1] == block:
+                            cell[2] = lots
+                            restored_count += 1
+                            break
+            
+            print(f"📦 Updated {restored_count} positions in local database")
+            return True
+            
+        else:
+            print("📝 No shelf state data from Gateway, using current local state")
+            return True
+            
+    except Exception as e:
+        print(f"❌ Error initializing shelf state: {e}")
+        return False
+
 @app.on_event("startup")
 async def startup_event():
     """เรียกใช้ฟังก์ชัน initialization เมื่อแอปพลิเคชันเริ่มต้น"""
@@ -47,7 +97,14 @@ async def startup_event():
     from core.database import migrate_existing_lots_add_biz
     migrate_existing_lots_add_biz()
     
-    await initialize_shelf_info()
+    # Initialize shelf info first
+    shelf_init_success = await initialize_shelf_info()
+    
+    # Then initialize shelf state (requires shelf_id)
+    if shelf_init_success:
+        await initialize_shelf_state()
+    else:
+        print("⚠️ Skipping shelf state initialization due to shelf info failure")
 
 
 STATIC_PATH = pathlib.Path(__file__).parent / "static"

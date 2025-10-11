@@ -12,7 +12,7 @@ from datetime import datetime
 from core.led_controller import set_led
 
 # --- Import จากไฟล์ที่เราสร้างขึ้น ---
-from core.models import JobRequest, ErrorRequest, LEDPositionRequest, LEDPositionsRequest, LEDClearAndBatch, LMSCheckShelfRequest, LMSCheckShelfResponse, ShelfComplete
+from core.models import JobRequest, ErrorRequest, LEDPositionRequest, LEDPositionsRequest, LEDClearAndBatch, LMSCheckShelfRequest, LMSCheckShelfResponse, ShelfComplete, ShelfState
 from core.database import (
     DB, get_job_by_id, get_lots_in_position, add_lot_to_position, remove_lot_from_position, update_lot_quantity, validate_position, get_shelf_info, SHELF_CONFIG, update_lot_biz
 )
@@ -769,6 +769,28 @@ async def complete_job(job_id: str):
     # Job completion logged locally (Gateway data sent via send_shelf_complete_to_gateway)
     print(f"✅ Job completed: {job_id} - {lot_no} ({action}) - Gateway: {'✅' if gateway_success else '❌'}")
     
+    # 🔽 AUTO-SYNC SHELF STATE TO GATEWAY AFTER JOB COMPLETION 🔽
+    try:
+        # สร้าง current shelf_state สำหรับส่งไป Gateway
+        current_shelf_state = {}
+        for cell in DB["shelf_state"]:
+            l, b, lots = cell
+            position_key = f"L{l}B{b}"
+            current_shelf_state[position_key] = {
+                "level": l,
+                "block": b, 
+                "lots": lots,
+                "total_trays": sum(lot.get("tray_count", 1) for lot in lots) if lots else 0
+            }
+        
+        # ส่งไป Gateway
+        sync_success = await sync_shelf_state_to_gateway(current_shelf_state)
+        print(f"📡 Shelf state auto-sync after job completion: {'✅' if sync_success else '❌'}")
+        
+    except Exception as e:
+        print(f"⚠️ Auto-sync shelf state failed: {e}")
+        # ไม่ให้ error นี้ขัดขวางการทำงานหลัก
+    
     # ลบงานออกจากคิว
     DB["jobs"] = [j for j in DB["jobs"] if j.get("jobId") != job_id]
     
@@ -1271,3 +1293,295 @@ async def get_shelf_info_endpoint():
             "shelf_name": "Shelf",
             "local_ip": "unknown"
         }
+
+# === Shelf State Management Functions ===
+
+async def sync_shelf_state_to_gateway(shelf_state_data):
+    """
+    ส่ง shelf_state ไปยัง Gateway เพื่อบันทึกสถานะปัจจุบัน
+    """
+    try:
+        shelf_id = GLOBAL_SHELF_INFO.get("shelf_id", "UNKNOWN")
+        
+        # แปลงเป็น array format สำหรับ Gateway
+        shelf_state_array = []
+        if isinstance(shelf_state_data, dict):
+            # แปลงจาก dict เป็น array
+            for position_key, position_data in shelf_state_data.items():
+                shelf_state_array.append({
+                    "level": position_data["level"],
+                    "block": position_data["block"], 
+                    "lots": position_data["lots"]
+                })
+        else:
+            # ถ้าเป็น array อยู่แล้ว
+            shelf_state_array = shelf_state_data
+        
+        gateway_payload = {
+            "shelf_id": shelf_id,
+            "update_flg": "1",  # เปลี่ยนจาก update เป็น update_flg
+            "shelf_state": shelf_state_array
+        }
+        
+        headers = {
+            "Accept": "application/json", 
+            "Content-Type": "application/json"
+        }
+        
+        print(f"🔄 Syncing shelf state to Gateway: {GATEWAY_BASE_URL}/IoTManagement/shelf/shelfItem")
+        print(f"📦 Payload: {gateway_payload}")
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{GATEWAY_BASE_URL}/IoTManagement/shelf/shelfItem",
+                json=gateway_payload,
+                headers=headers
+            )
+            
+            print(f"📡 Gateway Response Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                print(f"✅ Shelf state synced successfully")
+                return True
+            else:
+                print(f"⚠️ Gateway sync failed: {response.status_code} - {response.text}")
+                return False
+                
+    except Exception as e:
+        print(f"⚠️ Shelf state sync error: {e}")
+        return False
+
+async def restore_shelf_state_from_gateway():
+    """
+    กู้คืน shelf_state จาก Gateway เมื่อเริ่มต้นระบบ
+    """
+    try:
+        shelf_id = GLOBAL_SHELF_INFO.get("shelf_id")
+        
+        if not shelf_id:
+            print(f"⚠️ No shelf_id available for state restore")
+            return None
+            
+        gateway_payload = {
+            "shelf_id": shelf_id,
+            "update_flg": "0",  # เปลี่ยนจาก update เป็น update_flg
+            "shelf_state": []  # empty array for read
+        }
+        
+        headers = {
+            "Accept": "application/json", 
+            "Content-Type": "application/json"
+        }
+        
+        print(f"🔄 Restoring shelf state from Gateway: {GATEWAY_BASE_URL}/IoTManagement/shelf/shelfItem")
+        print(f"📦 Read Payload: {gateway_payload}")
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{GATEWAY_BASE_URL}/IoTManagement/shelf/shelfItem",
+                json=gateway_payload,
+                headers=headers
+            )
+            
+            print(f"📡 Gateway Response Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                response_data = response.json()
+                print(f"✅ Shelf state restored successfully")
+                print(f"📦 Restored state: {response_data}")
+                
+        
+                shelf_state = response_data.get("data", [])
+                
+                return shelf_state
+            else:
+                print(f"⚠️ Gateway restore failed: {response.status_code} - {response.text}")
+                return None
+                
+    except Exception as e:
+        print(f"⚠️ Shelf state restore error: {e}")
+        return None
+
+@router.post("/api/shelf/shelfItem", tags=["Shelf State Management"])
+async def manage_shelf_state(request: Request):
+    """
+    จัดการ shelf state - รองรับทั้งการอ่าน (update_flg="0") และการเขียน (update_flg="1")
+    ใช้เชื่อมต่อกับ Gateway API รูปแบบใหม่
+    """
+    try:
+        payload = await request.json()
+        shelf_id = payload.get("shelf_id")
+        update_mode = payload.get("update_flg")  # เปลี่ยนจาก update เป็น update_flg
+        shelf_state_data = payload.get("shelf_state", [])
+        
+        print(f"📋 Shelf State Management: ID={shelf_id}, Mode={update_mode}")
+        
+        # Validate required fields
+        if not shelf_id:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "message": "shelf_id is required"
+                }
+            )
+        
+        if update_mode not in ["0", "1"]:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error", 
+                    "message": "update_flg must be '0' (read) or '1' (write)"
+                }
+            )
+        
+        if update_mode == "0":
+            # Read mode - กู้คืนสถานะจาก Gateway
+            print(f"📖 Reading shelf state from Gateway...")
+            
+            restored_state = await restore_shelf_state_from_gateway()
+            
+            if restored_state is not None and len(restored_state) > 0:
+                # อัปเดต local database ด้วยข้อมูลที่กู้คืนได้
+                # แปลงจาก Gateway array format เป็น local DB format
+                DB["shelf_state"] = []
+                for level, num_blocks in SHELF_CONFIG.items():
+                    for block in range(1, num_blocks + 1):
+                        DB["shelf_state"].append([level, block, []])
+                
+                # อัปเดตด้วยข้อมูลจาก Gateway
+                for cell_data in restored_state:
+                    level = cell_data.get("level")
+                    block = cell_data.get("block") 
+                    lots = cell_data.get("lots", [])
+                    
+                    # หา cell ที่ตรงกันใน DB
+                    for i, (l, b, existing_lots) in enumerate(DB["shelf_state"]):
+                        if l == level and b == block:
+                            DB["shelf_state"][i] = [level, block, lots]
+                            break
+                
+                print(f"✅ Local DB updated with restored state")
+                
+                # Broadcast restored state to WebSocket clients
+                try:
+                    websocket_shelf_state = []
+                    for cell in DB["shelf_state"]:
+                        level, block, lots = cell
+                        websocket_shelf_state.append({"level": level, "block": block, "lots": lots})
+                    
+                    await manager.broadcast(json.dumps({
+                        "type": "shelf_state_restored",
+                        "payload": {
+                            "shelf_state": websocket_shelf_state,
+                            "shelf_id": shelf_id,
+                            "source": "gateway_restore"
+                        }
+                    }))
+                    print(f"📡 Broadcasted restored shelf state to WebSocket clients")
+                except Exception as broadcast_error:
+                    print(f"⚠️ WebSocket broadcast failed: {broadcast_error}")
+                
+                return {
+                    "status": "success", 
+                    "shelf_id": shelf_id,
+                    "update_flg": "0",
+                    "shelf_state": restored_state,
+                    "message": "Shelf state restored from Gateway"
+                }
+            else:
+                # ถ้าไม่มีข้อมูลใน Gateway ให้ส่ง current state กลับ
+                current_state = []
+                for cell in DB["shelf_state"]:
+                    level, block, lots = cell
+                    if lots:  # ส่งเฉพาะ cell ที่มีของ
+                        current_state.append({
+                            "level": level,
+                            "block": block,
+                            "lots": lots
+                        })
+                
+                return {
+                    "status": "success",
+                    "shelf_id": shelf_id, 
+                    "update_flg": "0",
+                    "shelf_state": current_state,
+                    "message": "No data in Gateway, using current local state"
+                }
+        
+        elif update_mode == "1":
+            # Write mode - บันทึกสถานะไป Gateway
+            print(f"💾 Writing shelf state to Gateway...")
+            
+            # อัปเดต local database ด้วยข้อมูลที่ส่งมา
+            if shelf_state_data and len(shelf_state_data) > 0:
+                # รีเซ็ต shelf_state
+                DB["shelf_state"] = []
+                for level, num_blocks in SHELF_CONFIG.items():
+                    for block in range(1, num_blocks + 1):
+                        DB["shelf_state"].append([level, block, []])
+                
+                # อัปเดตด้วยข้อมูลใหม่
+                for cell_data in shelf_state_data:
+                    level = cell_data.get("level")
+                    block = cell_data.get("block")
+                    lots = cell_data.get("lots", [])
+                    
+                    # หา cell ที่ตรงกันใน DB
+                    for i, (l, b, existing_lots) in enumerate(DB["shelf_state"]):
+                        if l == level and b == block:
+                            DB["shelf_state"][i] = [level, block, lots]
+                            break
+                
+                print(f"✅ Local DB updated with new state")
+            
+            # ส่งไป Gateway
+            sync_success = await sync_shelf_state_to_gateway(shelf_state_data)
+            
+            # Broadcast shelf state update to WebSocket clients
+            if sync_success:
+                try:
+                    # แปลง shelf_state เป็น format สำหรับ WebSocket
+                    websocket_shelf_state = []
+                    for cell in DB["shelf_state"]:
+                        level, block, lots = cell
+                        websocket_shelf_state.append({"level": level, "block": block, "lots": lots})
+                    
+                    await manager.broadcast(json.dumps({
+                        "type": "shelf_state_updated",
+                        "payload": {
+                            "shelf_state": websocket_shelf_state,
+                            "shelf_id": shelf_id,
+                            "source": "gateway_sync"
+                        }
+                    }))
+                    print(f"📡 Broadcasted shelf state update to WebSocket clients")
+                except Exception as broadcast_error:
+                    print(f"⚠️ WebSocket broadcast failed: {broadcast_error}")
+            
+            return {
+                "status": "success" if sync_success else "error",
+                "shelf_id": shelf_id,
+                "update_flg": "1", 
+                "shelf_state": shelf_state_data,
+                "gateway_sync": sync_success,
+                "message": "Shelf state updated and synced" if sync_success else "Gateway sync failed"
+            }
+            
+        else:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "message": "Invalid update_flg. Use '0' for read or '1' for write"
+                }
+            )
+            
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error", 
+                "message": str(e)
+            }
+        )

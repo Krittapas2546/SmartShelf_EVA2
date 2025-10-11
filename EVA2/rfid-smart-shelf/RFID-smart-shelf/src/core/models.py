@@ -66,5 +66,9 @@ class ShelfComplete(BaseModel):
     block: str = Field(..., example="2")
     place_flg: str = Field(..., example="1")
     trn_status: str = Field(..., example="1")
-    tray_count: str = Field(..., example="20")
+
+class ShelfState(BaseModel):
+    shelf_id: str = Field(..., example="PC2")
+    update : str = Field(..., example="1") # 0 = read only, 1 = update
+    shelf_state: dict = Field(..., example={})    # Null case update data
 
