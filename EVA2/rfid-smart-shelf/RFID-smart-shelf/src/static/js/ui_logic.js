@@ -855,11 +855,16 @@ function getCellCapacity(level, block) {
                         
                         // คำนวณความสูงตาม tray_count แบบสัดส่วนที่ชัดเจน
                         const trayCount = parseInt(lot.tray_count) || 1;
-                        const maxCapacity = 24;
+                        const maxCapacity = getCellCapacity(level, block); // ใช้ความจุจริงของ cell แทนค่าคงที่
                         const maxCellHeight = 85; // ใช้ความสูงสูงสุดที่เหมาะสมกับ cell height 90px
                         const heightRatio = trayCount / maxCapacity;
                         const trayHeight = Math.max(heightRatio * maxCellHeight, 2); // ขั้นต่ำ 2px เพื่อให้เห็น
                         lotDiv.style.height = Math.round(trayHeight) + 'px';
+                        
+                        // Debug log สำหรับตรวจสอบการคำนวณ
+                        if (level === 1 && block <= 2) { // debug เฉพาะช่องแรกๆ เพื่อไม่ให้ spam
+                            console.log(`📐 L${level}B${block} - Lot: ${lot.lot_no}, Trays: ${trayCount}/${maxCapacity}, Height: ${Math.round(trayHeight)}px (${(heightRatio * 100).toFixed(1)}%)`);
+                        }
                         
                         // เก็บข้อมูลใน title สำหรับ tooltip เท่านั้น
                         lotDiv.title = `Lot: ${lot.lot_no}, Tray: ${trayCount}, Height: ${Math.round(trayHeight)}px`;
