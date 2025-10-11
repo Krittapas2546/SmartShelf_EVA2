@@ -245,7 +245,17 @@ body {
         .shelf-cell.size-large { width: 100px; height: 100px; }
         .shelf-cell.size-xlarge { width: 130px; height: 130px; }
         .shelf-cell.has-item { background-color: #adb5bd; border-color: #6c757d; }
-        .shelf-cell.selected-task { background-color: #0d6efd !important; border-color: #0d6efd !important; } 
+        .shelf-cell.selected-task { 
+            background-color: #007bff !important; 
+            border: 3px solid #0056b3 !important;
+            box-shadow: 0 0 15px rgba(0, 123, 255, 0.5) !important;
+            animation: pulse-target 1.5s infinite ease-in-out;
+        }
+        
+        @keyframes pulse-target {
+            0%, 100% { transform: scale(1); box-shadow: 0 0 15px rgba(0, 123, 255, 0.5); }
+            50% { transform: scale(1.05); box-shadow: 0 0 25px rgba(0, 123, 255, 0.8); }
+        } 
         .shelf-cell.wrong-location {
             /* ลบ background-color และ box-shadow เก่าออก */
             border-color: #b02a37 !important;

@@ -241,8 +241,12 @@ async def control_led(request: Request):
     except Exception as e:
         return JSONResponse(status_code=400, content={"error": "Invalid JSON", "detail": str(e)})
 
-    if not (1 <= level <= 4 and 1 <= block <= 6):
-        return JSONResponse(status_code=400, content={"error": "Invalid level or block"})
+    # Dynamic validation using current shelf config
+    if not validate_position(level, block):
+        return JSONResponse(status_code=400, content={
+            "error": "Invalid position", 
+            "message": f"Level {level}, Block {block} does not exist in current shelf configuration"
+        })
 
     try:
         result = set_led(level, block, r, g, b)
@@ -259,10 +263,25 @@ async def control_led_batch(request: Request):
         leds = data.get('leds', [])
         if not isinstance(leds, list):
             return JSONResponse(status_code=400, content={"error": "Invalid format: 'leds' must be a list"})
+        
+        # Validate all LED positions before execution
+        invalid_positions = []
+        for i, led in enumerate(leds):
+            level = int(led.get('level', 0))
+            block = int(led.get('block', 0))
+            if not validate_position(level, block):
+                invalid_positions.append(f"Index {i}: L{level}B{block}")
+        
+        if invalid_positions:
+            return JSONResponse(status_code=400, content={
+                "error": "Invalid LED positions found",
+                "invalid_positions": invalid_positions
+            })
+        
         # ตัวอย่าง: [{level, block, r, g, b}, ...]
         from core.led_controller import set_led_batch
-        set_led_batch(leds)
-        return {"ok": True, "count": len(leds)}
+        result = set_led_batch(leds)
+        return result
     except Exception as e:
         return JSONResponse(status_code=400, content={"error": "Invalid JSON or batch", "detail": str(e)})
 
@@ -296,11 +315,20 @@ async def control_led_by_position(request: LEDPositionRequest):
             })
         
         # Control LED
+        print(f"🔍 LED Control Debug: {position} -> L{level}B{block}")
         result = set_led(level, block, r, g, b)
+        
+        # ตรวจสอบผลการควบคุม LED
+        if not result.get("ok", False):
+            return JSONResponse(status_code=500, content={
+                "error": "LED control failed",
+                "message": result.get("error", "Unknown LED error"),
+                "position": position
+            })
         
         # LED control logged locally only
         hex_color = f"#{r:02x}{g:02x}{b:02x}"
-        print(f"💡 LED Control: L{level}B{block} = {hex_color}")
+        print(f"💡 LED Control: L{level}B{block} = {hex_color} ✅")
         
         result.update({
             "position": position,
@@ -1858,3 +1886,26 @@ async def manage_shelf_state(shelf_state_request: ShelfState):
                 "message": str(e)
             }
         )
+
+# === Debug Endpoints ===
+@router.get("/api/debug/position/{level}/{block}", tags=["Debug"])
+async def debug_position_validation(level: int, block: int):
+    """Debug position validation - ตรวจสอบว่าตำแหน่งมีอยู่หรือไม่"""
+    try:
+        from core.database import debug_position_validation, SHELF_CONFIG, DYNAMIC_LAYOUT
+        
+        # Run debug validation
+        is_valid = debug_position_validation(level, block)
+        
+        return {
+            "position": f"L{level}B{block}",
+            "valid": is_valid,
+            "shelf_config": SHELF_CONFIG,
+            "has_gateway_layout": bool(DYNAMIC_LAYOUT),
+            "gateway_positions": list(DYNAMIC_LAYOUT.keys()) if DYNAMIC_LAYOUT else []
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={
+            "error": "Debug validation failed",
+            "detail": str(e)
+        })

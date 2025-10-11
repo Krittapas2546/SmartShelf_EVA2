@@ -1,16 +1,14 @@
-# SHELF_CONFIG - ยังคงจำเป็น! ใช้งานใน:
-# 1. Fallback เมื่อ Gateway ไม่พร้อมใช้งาน
-# 2. LED Controller สำหรับคำนวณ pixel positions  
-# 3. Frontend grid creation และ validation
-# 4. API endpoints สำหรับ backward compatibility
-# 5. Database initialization และ state management
-# *** จะถูกอัปเดตโดยอัตโนมัติเมื่อดึงข้อมูลจาก Gateway ***
-SHELF_CONFIG = {
+# === Fallback Configuration (ใช้เฉพาะเมื่อ Gateway ไม่พร้อม) ===
+FALLBACK_SHELF_CONFIG = {
     1: 6,  # Level 1: 6 blocks (fallback)
-    2: 6,  # Level 2: 6 blocks (fallback)
+    2: 6,  # Level 2: 6 blocks (fallback)  
     3: 6,  # Level 3: 6 blocks (fallback)
     4: 6,  # Level 4: 6 blocks (fallback)
 }
+
+# === Dynamic Configuration (Primary Source: Gateway) ===
+# SHELF_CONFIG จะถูกสร้างจาก Gateway layout อัตโนมัติ
+SHELF_CONFIG = FALLBACK_SHELF_CONFIG.copy()  # เริ่มต้นด้วย fallback
 
 # === Dynamic Layout Configuration ===
 # จะถูกอัปเดตจาก Gateway API แทนการ hardcode
@@ -31,6 +29,45 @@ DYNAMIC_LAYOUT = {}
 
 # ค่าเริ่มต้นสำหรับช่องที่ไม่ได้กำหนดใน CELL_CAPACITIES
 DEFAULT_CELL_CAPACITY = 24
+
+def get_shelf_config():
+    """
+    Get current shelf configuration (compatible with LED controller)
+    
+    Returns:
+        dict: Current SHELF_CONFIG with level -> blocks mapping
+    """
+    return SHELF_CONFIG.copy()
+
+def debug_position_validation(level: int, block: int):
+    """
+    Debug position validation - แสดงผลรายละเอียดการตรวจสอบตำแหน่ง
+    """
+    position_key = f"L{level}-B{block}"
+    
+    print(f"\n🔍 Debug Position Validation: {position_key}")
+    print(f"   Gateway Layout Available: {'✅' if DYNAMIC_LAYOUT else '❌'}")
+    
+    if DYNAMIC_LAYOUT:
+        if position_key in DYNAMIC_LAYOUT:
+            slot_data = DYNAMIC_LAYOUT[position_key]
+            print(f"   Found in Gateway: ✅")
+            print(f"   Slot Data: {slot_data}")
+            print(f"   Active: {'✅' if slot_data.get('active', True) else '❌'}")
+        else:
+            print(f"   Found in Gateway: ❌")
+            print(f"   Available positions: {list(DYNAMIC_LAYOUT.keys())[:10]}...")
+    
+    # Fallback check
+    shelf_check = level in SHELF_CONFIG and 1 <= block <= SHELF_CONFIG[level]
+    print(f"   SHELF_CONFIG check: {'✅' if shelf_check else '❌'}")
+    print(f"   Current SHELF_CONFIG: {SHELF_CONFIG}")
+    
+    # Final result
+    final_result = validate_position(level, block)
+    print(f"   Final validation result: {'✅' if final_result else '❌'}")
+    
+    return final_result
 
 def update_layout_from_gateway(gateway_layout: dict):
     """
@@ -78,7 +115,16 @@ def update_layout_from_gateway(gateway_layout: dict):
         
         # อัปเดต global variables
         CELL_CAPACITIES.update(new_capacities)
+        
+        # อัปเดต SHELF_CONFIG ด้วยข้อมูลจาก Gateway
+        old_config = SHELF_CONFIG.copy()
+        SHELF_CONFIG.clear()
         SHELF_CONFIG.update(new_shelf_config)
+        
+        print(f"📦 SHELF_CONFIG updated from Gateway:")
+        print(f"   Old: {old_config}")
+        print(f"   New: {SHELF_CONFIG}")
+        print(f"   Total positions: {sum(SHELF_CONFIG.values())}")
         
         # อัปเดต shelf_state structure ถ้าจำเป็น
         current_state = DB.get("shelf_state", [])
@@ -105,6 +151,14 @@ def update_layout_from_gateway(gateway_layout: dict):
         
         # เพิ่ม detailed logging สำหรับ layout ปัจจุบัน
         log_current_layout()
+        
+        # อัปเดต LED configuration ให้สอดคล้องกับ layout ใหม่
+        try:
+            from core.led_controller import refresh_led_config
+            refresh_led_config()
+            print("💡 LED configuration refreshed for new layout")
+        except Exception as led_error:
+            print(f"⚠️ LED refresh failed: {led_error}")
         
         return True
         
@@ -223,7 +277,23 @@ def get_lot_in_position(level: int, block: int):
     return None
 
 def validate_position(level: int, block: int):
-    """ตรวจสอบว่าตำแหน่งที่กำหนดมีอยู่จริงในชั้นวางหรือไม่"""
+    """
+    ตรวจสอบว่าตำแหน่งที่กำหนดมีอยู่จริงในชั้นวางหรือไม่
+    ใช้ข้อมูลจาก Gateway Layout หาก available, ไม่งั้นใช้ SHELF_CONFIG
+    """
+    # ลำดับการตรวจสอบ: 1) Gateway Layout, 2) SHELF_CONFIG
+    
+    # 1. ตรวจสอบจาก Gateway Layout ก่อน (ข้อมูลที่แน่นอน)
+    if DYNAMIC_LAYOUT:
+        position_key = f"L{level}-B{block}"
+        if position_key in DYNAMIC_LAYOUT:
+            slot_data = DYNAMIC_LAYOUT[position_key]
+            return slot_data.get("active", True)  # ถ้ามีใน layout และ active
+        
+        # ถ้าไม่มีใน Gateway layout แสดงว่าไม่มีตำแหน่งนี้
+        return False
+    
+    # 2. Fallback: ใช้ SHELF_CONFIG (เก่า)
     return level in SHELF_CONFIG and 1 <= block <= SHELF_CONFIG[level]
 
 def update_lot_biz(lot_no: str, biz: str):
