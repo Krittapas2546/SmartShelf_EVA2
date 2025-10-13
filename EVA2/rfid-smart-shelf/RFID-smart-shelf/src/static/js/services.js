@@ -5,6 +5,8 @@
 
 // WebSocket Connection
 let websocketConnection = null;
+let reconnectAttempts = 0;
+const maxReconnectAttempts = 5;
 
 /**
  * ===================
@@ -25,9 +27,13 @@ async function loadShelfConfig() {
             console.warn('⚠️ Failed to load layout from Gateway, using default config');
             const response = await fetch('/api/shelf/config');
             if (response.ok) {
-                const config = await response.json();
-                ShelfState.setShelfConfig(config.SHELF_CONFIG);
-                ShelfState.setCellCapacities(config.CELL_CAPACITIES);
+                const data = await response.json();
+                // อ่านฟิลด์ตามรูปแบบเดิม: config, cell_capacities
+                const config = data.shelf_config || data.config || {};
+                const capacities = data.cell_capacities || {};
+                
+                ShelfState.setShelfConfig(config);
+                ShelfState.setCellCapacities(capacities);
                 return true;
             }
         }
@@ -35,15 +41,20 @@ async function loadShelfConfig() {
         
     } catch (error) {
         console.warn('⚠️ Failed to load shelf config from server:', error);
-        // Fallback config
+        // Fallback config - ใช้ข้อมูลเดียวกับที่ Gateway ส่งมา (8 columns x 4 levels)
         const fallbackConfig = {
-            1: 6, 2: 6, 3: 6, 4: 6
+            1: 8, 2: 8, 3: 8, 4: 8
         };
-        const fallbackCapacities = {
-            '1-1': 22, '1-2': 24, '1-3': 24, '1-4': 24, '1-5': 24, '1-6': 24
-        };
+        const fallbackCapacities = {};
+        // สร้าง capacity สำหรับทุก cell (8x4 = 32 cells)
+        for (let level = 1; level <= 4; level++) {
+            for (let block = 1; block <= 8; block++) {
+                fallbackCapacities[`${level}-${block}`] = 40;
+            }
+        }
         ShelfState.setShelfConfig(fallbackConfig);
         ShelfState.setCellCapacities(fallbackCapacities);
+        console.log('📋 Using fallback config (8x4):', fallbackConfig);
         return false;
     }
 }
@@ -71,25 +82,31 @@ async function loadLayoutFromGateway() {
             const data = await response.json();
             console.log('📋 Gateway layout response:', data);
 
-            if (data.success && data.layout && data.layout.slots) {
-                const slots = data.layout.slots;
+            // ตรวจสอบ format ใหม่จาก Backend API
+            if (data.status === "success" && data.layout) {
+                const layout = data.layout;
                 const newConfig = {};
                 const newCapacities = {};
 
-                // แปลง slots เป็น SHELF_CONFIG และ CELL_CAPACITIES
-                Object.keys(slots).forEach(slotKey => {
-                    const slot = slots[slotKey];
-                    const level = slot.level;
-                    const block = slot.block;
-                    const capacity = slot.max_tray_count || 24;
+                // แปลง layout เป็น SHELF_CONFIG และ CELL_CAPACITIES
+                // layout format: {"L1B1": {...}, "L1B2": {...}, ...}
+                Object.keys(layout).forEach(positionKey => {
+                    // Parse position key (L1B1 -> level=1, block=1)
+                    const match = positionKey.match(/^L(\d+)B(\d+)$/);
+                    if (match) {
+                        const level = parseInt(match[1]);
+                        const block = parseInt(match[2]);
+                        const slot = layout[positionKey];
+                        const capacity = slot.max_tray_count || 40;
 
-                    // อัปเดต SHELF_CONFIG
-                    if (!newConfig[level] || newConfig[level] < block) {
-                        newConfig[level] = block;
+                        // อัปเดต SHELF_CONFIG
+                        if (!newConfig[level] || newConfig[level] < block) {
+                            newConfig[level] = block;
+                        }
+
+                        // อัปเดต CELL_CAPACITIES
+                        newCapacities[`${level}-${block}`] = capacity;
                     }
-
-                    // อัปเดต CELL_CAPACITIES
-                    newCapacities[`${level}-${block}`] = capacity;
                 });
 
                 ShelfState.setShelfConfig(newConfig);
@@ -134,13 +151,14 @@ async function getShelfStateFromServer() {
 async function syncQueueFromBackend() {
     try {
         console.log('🔄 Syncing queue from backend...');
-        const response = await fetch('/api/queue');
+        const response = await fetch('/command');
         if (response.ok) {
-            const queueData = await response.json();
-            if (Array.isArray(queueData)) {
-                ShelfState.setQueue(queueData);
-                console.log(`✅ Queue synced: ${queueData.length} jobs`);
-                return queueData;
+            const data = await response.json();
+            const jobs = data.jobs || [];
+            if (Array.isArray(jobs)) {
+                ShelfState.setQueue(jobs);
+                console.log(`✅ Queue synced: ${jobs.length} jobs`);
+                return jobs;
             }
         }
         console.warn('⚠️ Failed to sync queue from backend');
@@ -163,47 +181,33 @@ async function loadPendingJobsFromGateway() {
         return false;
     }
     
-    const shelfId = ShelfState.getShelfId();
-    if (!shelfId) {
-        console.warn('⚠️ ไม่มี shelf_id - ไม่สามารถดึงงานที่ค้างอยู่ได้');
-        return false;
-    }
-    
     try {
-        const response = await fetch('/api/pending-jobs', {
+        // ใช้ endpoint เดิม ไม่ต้องส่ง shelf_id ใน body
+        const response = await fetch('/api/shelf/pending/load', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                shelf_id: shelfId
-            })
+            }
         });
 
         if (response.ok) {
             const data = await response.json();
             console.log('📋 Pending jobs response:', data);
             
-            if (data.success && Array.isArray(data.jobs) && data.jobs.length > 0) {
-                console.log(`✅ พบงานที่ค้างอยู่ ${data.jobs.length} งาน`);
+            if (data.status === 'success' && data.loaded_count > 0) {
+                console.log(`✅ โหลดงานที่ค้างอยู่ ${data.loaded_count} งาน`);
                 
-                // เพิ่มงานลงใน queue โดยไม่ซ้ำกับที่มีอยู่แล้ว
-                const currentQueue = ShelfState.getQueue();
-                const existingJobIds = new Set(currentQueue.map(job => job.jobId));
+                // รอ WebSocket broadcast jobs_reloaded หรือ sync queue ใหม่
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                await syncQueueFromBackend();
                 
-                const newJobs = data.jobs.filter(job => !existingJobIds.has(job.jobId));
-                
-                if (newJobs.length > 0) {
-                    const updatedQueue = [...currentQueue, ...newJobs];
-                    ShelfState.setQueue(updatedQueue);
-                    console.log(`📝 เพิ่มงานใหม่ ${newJobs.length} งาน เข้าสู่คิว`);
-                }
+                ShelfState.setPendingJobsLoaded(true);
+                return true;
             } else {
                 console.log('📋 ไม่พบงานที่ค้างอยู่');
+                ShelfState.setPendingJobsLoaded(true);
+                return false;
             }
-            
-            ShelfState.setPendingJobsLoaded(true);
-            return true;
         } else {
             console.error('❌ Failed to load pending jobs:', response.status);
             return false;
@@ -256,7 +260,7 @@ async function checkShelfFromLMS(lotNo, placeFlg) {
     try {
         console.log(`🔍 ตรวจสอบชั้นวางจาก LMS สำหรับ LOT: ${lotNo}`);
         
-        const response = await fetch('/api/lms/check-shelf', {
+        const response = await fetch('/api/shelf/askCorrectShelf', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -319,7 +323,7 @@ async function initializeShelfName() {
     console.log('🏷️ กำลังดึงข้อมูล shelf name และ shelf_id จาก Gateway...');
     
     try {
-        const response = await fetch('/api/shelf/name');
+        const response = await fetch('/ShelfName');
         if (response.ok) {
             const data = await response.json();
             console.log('📋 Shelf name response:', data);
@@ -421,20 +425,99 @@ async function setBatchLED(positions, clearFirst = true) {
 
 /**
  * ===================
+ * HYDRATION FUNCTIONS
+ * ===================
+ */
+
+/**
+ * สร้างงานตัวอย่างสำหรับทดสอบ
+ */
+function hydrateWithDummyJobs() {
+    console.log('📋 กำลังสร้างงานตัวอย่างสำหรับทดสอบ...');
+    
+    const dummyJobs = [
+        {
+            jobId: 'JOB-2024-001',
+            lotNo: 'LOT001',
+            productCode: 'PRD-001',
+            productName: 'สินค้าทดสอบ A',
+            quantity: 10,
+            targetCell: 'A1',
+            status: 'pending',
+            createdAt: new Date().toISOString()
+        },
+        {
+            jobId: 'JOB-2024-002', 
+            lotNo: 'LOT002',
+            productCode: 'PRD-002',
+            productName: 'สินค้าทดสอบ B',
+            quantity: 15,
+            targetCell: 'B3',
+            status: 'pending',
+            createdAt: new Date().toISOString()
+        }
+    ];
+    
+    // เพิ่มงานลงใน localStorage และ state
+    const currentQueue = ShelfState.getQueue() || [];
+    const newQueue = [...currentQueue, ...dummyJobs];
+    ShelfState.setQueue(newQueue);
+    
+    console.log(`✅ เพิ่มงานตัวอย่าง ${dummyJobs.length} งาน`);
+    return dummyJobs;
+}
+
+/**
+ * สร้าง shelf config ตัวอย่าง (8x4 grid)
+ */
+function hydrateWithDefaultShelfConfig() {
+    console.log('🏗️ กำลังสร้าง shelf config ตัวอย่าง...');
+    
+    const defaultConfig = {
+        rows: 4,
+        columns: 8,
+        total_cells: 32,
+        shelf_id: "PC2",
+        cell_capacities: {}
+    };
+    
+    // สร้าง cell capacities สำหรับ grid 8x4
+    const rows = ['A', 'B', 'C', 'D'];
+    for (let row = 0; row < 4; row++) {
+        for (let col = 1; col <= 8; col++) {
+            const cellId = `${rows[row]}${col}`;
+            defaultConfig.cell_capacities[cellId] = 50; // default capacity
+        }
+    }
+    
+    ShelfState.setShelfConfig(defaultConfig);
+    
+    console.log('✅ สร้าง default shelf config (8x4) สำเร็จ');
+    return defaultConfig;
+}
+
+/**
+ * ===================
  * WEBSOCKET SERVICES
  * ===================
  */
 
 /**
- * เริ่มต้น WebSocket connection
+ * เริ่มต้น WebSocket connection พร้อม auto-reconnection
  */
 function setupWebSocket(onMessageCallback) {
-    const ws = new WebSocket(`ws://${window.location.host}/ws`);
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    
+    console.log(`🔄 กำลังเชื่อมต่อ WebSocket: ${wsUrl}`);
+    
+    const ws = new WebSocket(wsUrl);
     
     websocketConnection = ws;
 
     ws.onopen = function(event) {
         console.log('🔌 WebSocket connected');
+        reconnectAttempts = 0; // Reset counter on successful connection
     };
 
     ws.onmessage = function(event) {
@@ -451,8 +534,19 @@ function setupWebSocket(onMessageCallback) {
     };
 
     ws.onclose = function(event) {
-        console.log('🔌 WebSocket disconnected');
+        console.log('🔌 WebSocket disconnected:', event.code, event.reason);
         websocketConnection = null;
+        
+        // Auto reconnect after 3 seconds
+        if (reconnectAttempts < maxReconnectAttempts) {
+            reconnectAttempts++;
+            console.log(`🔄 กำลังลอง reconnect ครั้งที่ ${reconnectAttempts}/${maxReconnectAttempts} ใน 3 วินาที...`);
+            setTimeout(() => {
+                setupWebSocket(onMessageCallback);
+            }, 3000);
+        } else {
+            console.error('❌ ไม่สามารถ reconnect WebSocket ได้หลังจาก', maxReconnectAttempts, 'ครั้ง');
+        }
     };
 
     ws.onerror = function(error) {
@@ -511,6 +605,10 @@ if (typeof window !== 'undefined') {
         // WebSocket
         setupWebSocket,
         sendWebSocketMessage,
-        closeWebSocket
+        closeWebSocket,
+        
+        // Hydration (Development)
+        hydrateWithDummyJobs,
+        hydrateWithDefaultShelfConfig
     };
 }

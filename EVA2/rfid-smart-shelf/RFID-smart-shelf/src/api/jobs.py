@@ -559,30 +559,6 @@ async def ask_correct_shelf(request: LMSCheckShelfRequest):
             }
         )
 
-# Backward compatibility endpoint - รองรับ endpoint เดิม
-# @router.post("/api/LMS/checkshelf", tags=["LMS Integration (Legacy)"])
-# async def check_shelf_from_lms_legacy(request: LMSCheckShelfRequest):
-#     """
-#     Legacy endpoint สำหรับ backward compatibility
-#     เรียกใช้ ask_correct_shelf ภายใน
-#     """
-#     # แปลง LMSCheckShelfRequest เป็น Request format
-#     from fastapi import Request
-#     from fastapi.datastructures import FormData
-#     import json
-    
-#     # สร้าง mock request object
-#     class MockRequest:
-#         async def json(self):
-#             return {
-#                 "lot_no": request.lot_no,
-#                 "place_flg": request.place_flg
-#             }
-    
-#     mock_request = MockRequest()
-    
-#     # เรียกใช้ฟังก์ชัน ask_correct_shelf
-#     return await ask_correct_shelf(mock_request)
 
 @router.get("/command", tags=["Jobs"])
 def get_all_jobs():

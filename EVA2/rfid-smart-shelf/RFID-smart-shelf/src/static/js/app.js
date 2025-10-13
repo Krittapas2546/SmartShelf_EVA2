@@ -17,33 +17,136 @@ function handleWebSocketMessage(data) {
     
     try {
         switch (data.type) {
+            case 'initial_state':
+                console.log('🎯 Initial state from WebSocket');
+                if (data.payload && data.payload.shelf_state) {
+                    ShelfState.setShelfState(data.payload.shelf_state);
+                    ShelfUI.renderShelfGrid();
+                }
+                break;
+                
+            case 'new_job':
+                console.log('📋 New job from WebSocket');
+                if (data.payload) {
+                    ShelfState.addToQueue(data.payload);
+                    ShelfQueue.renderAll();
+                    ShelfNotifications.showNotification(
+                        `งานใหม่: ${data.payload.lot_no}`,
+                        'info'
+                    );
+                }
+                break;
+                
+            case 'jobs_reloaded':
+                console.log('🔄 Jobs reloaded from WebSocket');
+                // Re-sync queue from backend
+                ShelfServices.syncQueueFromBackend().then(() => {
+                    ShelfQueue.renderAll();
+                    ShelfNotifications.showNotification('คิวงานได้รับการอัปเดต', 'info');
+                });
+                break;
+                
             case 'job_completed':
                 console.log('✅ Job completed notification from WebSocket');
-                if (data.job_data) {
+                const payload = data.payload || data;
+                
+                // เคลียร์ active job
+                ShelfState.removeActiveJob();
+                
+                // ลบงานจาก queue
+                if (payload.completedJobId) {
+                    ShelfState.removeFromQueue(payload.completedJobId);
+                }
+                
+                // อัปเดต shelf state
+                if (payload.shelf_state) {
+                    ShelfState.setShelfState(payload.shelf_state);
+                }
+                
+                // เคลียร์ LED
+                ShelfServices.clearLED();
+                
+                // แสดง notification
+                if (payload.lot_no) {
                     ShelfNotifications.showNotification(
-                        `งาน ${data.job_data.lot_no} เสร็จสิ้นแล้ว`,
+                        `งาน ${payload.lot_no} เสร็จสิ้นแล้ว`,
                         'success'
                     );
                 }
                 
-                // รีเฟรช UI และ state
-                ShelfServices.refreshShelfStateFromServer().then(() => {
+                // รีเฟรช UI
+                ShelfQueue.renderAll();
+                break;
+                
+            case 'job_warning':
+                console.log('⚠️ Job warning from WebSocket');
+                if (data.payload && data.payload.message) {
+                    ShelfNotifications.showNotification(
+                        `คำเตือน: ${data.payload.message}`,
+                        'warning'
+                    );
+                }
+                break;
+                
+            case 'job_error':
+                console.log('❌ Job error from WebSocket');
+                if (data.payload && data.payload.message) {
+                    ShelfNotifications.showNotification(
+                        `ข้อผิดพลาด: ${data.payload.message}`,
+                        'error'
+                    );
+                }
+                break;
+                
+            case 'job_canceled':
+                console.log('🚫 Job canceled from WebSocket');
+                if (data.payload) {
+                    // ลบงานจาก queue
+                    if (data.payload.lot_no) {
+                        const queue = ShelfState.getQueue();
+                        const filteredQueue = queue.filter(job => job.lot_no !== data.payload.lot_no);
+                        ShelfState.setQueue(filteredQueue);
+                    }
+                    
+                    // เคลียร์ active job ถ้าตรงกัน
+                    const activeJob = ShelfState.getActiveJob();
+                    if (activeJob && activeJob.lot_no === data.payload.lot_no) {
+                        ShelfState.removeActiveJob();
+                    }
+                    
                     ShelfQueue.renderAll();
-                });
+                    ShelfNotifications.showNotification(
+                        `งาน ${data.payload.lot_no} ถูกยกเลิก`,
+                        'warning'
+                    );
+                }
+                break;
+                
+            case 'system_reset':
+                console.log('🔄 System reset from WebSocket');
+                // เคลียร์ทุกอย่าง
+                ShelfState.setQueue([]);
+                ShelfState.removeActiveJob();
+                ShelfState.initializeShelfState();
+                ShelfServices.clearLED();
+                ShelfQueue.renderAll();
+                ShelfNotifications.showNotification('ระบบถูกรีเซ็ต', 'info');
                 break;
                 
             case 'shelf_state_updated':
                 console.log('🔄 Shelf state updated notification from WebSocket');
-                if (data.shelf_state) {
-                    ShelfState.setShelfState(data.shelf_state);
+                if (data.shelf_state || (data.payload && data.payload.shelf_state)) {
+                    const shelfState = data.shelf_state || data.payload.shelf_state;
+                    ShelfState.setShelfState(shelfState);
                     ShelfUI.renderShelfGrid();
                 }
                 break;
                 
             case 'queue_updated':
                 console.log('📋 Queue updated notification from WebSocket');
-                if (Array.isArray(data.queue)) {
-                    ShelfState.setQueue(data.queue);
+                const queueData = data.queue || (data.payload && data.payload.queue);
+                if (Array.isArray(queueData)) {
+                    ShelfState.setQueue(queueData);
                     ShelfQueue.renderAll();
                 }
                 break;
@@ -72,12 +175,59 @@ function handleWebSocketMessage(data) {
 }
 
 /**
+ * Hydrate application state from localStorage
+ */
+function hydrateFromLocalStorage() {
+    try {
+        // กู้คืน queue จาก localStorage
+        const storedQueue = localStorage.getItem(ShelfState.QUEUE_KEY);
+        if (storedQueue) {
+            const queue = JSON.parse(storedQueue);
+            if (Array.isArray(queue)) {
+                ShelfState.setQueue(queue);
+                console.log(`💾 Restored ${queue.length} jobs from localStorage`);
+            }
+        }
+        
+        // กู้คืน active job จาก localStorage
+        const storedActiveJob = localStorage.getItem(ShelfState.ACTIVE_JOB_KEY);
+        if (storedActiveJob && storedActiveJob !== 'null') {
+            const activeJob = JSON.parse(storedActiveJob);
+            if (activeJob && activeJob.lot_no) {
+                ShelfState.setActiveJob(activeJob);
+                console.log(`💾 Restored active job: ${activeJob.lot_no}`);
+            }
+        }
+        
+        // กู้คืน shelf state จาก localStorage
+        const storedShelfState = localStorage.getItem(ShelfState.GLOBAL_SHELF_STATE_KEY);
+        if (storedShelfState) {
+            const shelfState = JSON.parse(storedShelfState);
+            if (Array.isArray(shelfState)) {
+                ShelfState.setShelfState(shelfState);
+                console.log(`💾 Restored shelf state with ${shelfState.length} cells`);
+            }
+        }
+        
+        console.log('💾 localStorage hydration complete');
+        
+    } catch (error) {
+        console.error('❌ Error hydrating from localStorage:', error);
+        // ไม่ throw error เพื่อให้แอปยังทำงานได้
+    }
+}
+
+/**
  * Initialize application
  */
 async function initializeApplication() {
     console.log('📄 DOM Content Loaded - เริ่มต้นระบบ');
     
     try {
+        // 0. Hydrate จาก localStorage ก่อนอื่น
+        console.log('💾 Step 0: Hydrate from localStorage');
+        hydrateFromLocalStorage();
+        
         // 1. ดึงข้อมูล shelf name และ ID ก่อน
         console.log('🏷️ Step 1: Initialize shelf name and ID');
         await ShelfServices.initializeShelfName();
@@ -182,7 +332,7 @@ function setupEventListeners() {
         if (e.key === 'F5') {
             e.preventDefault();
             console.log('🔄 Manual refresh triggered');
-            refreshApplication();
+            debouncedRefresh();
         }
     });
     
@@ -200,9 +350,38 @@ function setupEventListeners() {
 }
 
 /**
+ * Debounced refresh to prevent multiple rapid refreshes
+ */
+let refreshTimeout = null;
+let isRefreshing = false;
+
+function debouncedRefresh() {
+    if (isRefreshing) {
+        console.log('🔄 Refresh already in progress, skipping...');
+        return;
+    }
+    
+    if (refreshTimeout) {
+        clearTimeout(refreshTimeout);
+    }
+    
+    refreshTimeout = setTimeout(() => {
+        refreshApplication();
+        refreshTimeout = null;
+    }, 300); // 300ms debounce
+}
+
+/**
  * Manual Application Refresh
  */
 async function refreshApplication() {
+    if (isRefreshing) {
+        console.log('🔄 Refresh already in progress, aborting...');
+        return;
+    }
+    
+    isRefreshing = true;
+    
     try {
         console.log('🔄 Refreshing application...');
         
@@ -213,7 +392,7 @@ async function refreshApplication() {
         await ShelfServices.syncQueueFromBackend();
         
         // Re-render everything
-        ShelfQueue.renderAll();
+        await ShelfQueue.renderAll();
         
         ShelfNotifications.showNotification('ระบบรีเฟรชเสร็จสิ้น', 'success');
         console.log('✅ Application refresh complete');
@@ -221,6 +400,8 @@ async function refreshApplication() {
     } catch (error) {
         console.error('❌ Failed to refresh application:', error);
         ShelfNotifications.showNotification('เกิดข้อผิดพลาดในการรีเฟรช', 'error');
+    } finally {
+        isRefreshing = false;
     }
 }
 
@@ -279,7 +460,35 @@ function setupConsoleUtilities() {
         },
         
         // Force refresh grid
-        refreshGrid: ShelfUI.refreshShelfGrid
+        refreshGrid: ShelfUI.refreshShelfGrid,
+        
+        // Additional debug utilities
+        clearCache: clearCacheAndRefresh,
+        hydrateLocal: hydrateFromLocalStorage,
+        debouncedRefresh: debouncedRefresh,
+        
+        // Global function exposure check
+        checkGlobalFunctions: () => {
+            const globals = ['selectJob', 'goBackToMain', 'goToQueueSelection', 'handleLotSearch', 'findAndSelectJobByLot'];
+            const missing = globals.filter(fn => typeof window[fn] !== 'function');
+            if (missing.length > 0) {
+                console.warn('⚠️ Missing global functions:', missing);
+                return { missing, available: globals.filter(fn => typeof window[fn] === 'function') };
+            }
+            console.log('✅ All global functions are exposed');
+            return { missing: [], available: globals };
+        },
+        
+        // localStorage inspector
+        inspectLocalStorage: () => {
+            return {
+                activeJob: localStorage.getItem(ShelfState.ACTIVE_JOB_KEY),
+                queue: localStorage.getItem(ShelfState.QUEUE_KEY),
+                shelfState: localStorage.getItem(ShelfState.GLOBAL_SHELF_STATE_KEY),
+                shelfConfig: localStorage.getItem('shelfConfig'),
+                cellCapacities: localStorage.getItem('cellCapacities')
+            };
+        }
     };
     
     console.log('🔧 Debug utilities available at window.ShelfDebug');
@@ -330,14 +539,77 @@ window.addEventListener('unhandledrejection', (event) => {
  * ===================
  */
 
+/**
+ * เคลียร์ cache และรีโหลด configuration
+ */
+async function clearCacheAndRefresh() {
+    console.log('🔄 Clearing cache and refreshing...');
+    
+    // เคลียร์ localStorage ครบทุก key
+    localStorage.removeItem(ShelfState.GLOBAL_SHELF_STATE_KEY);
+    localStorage.removeItem(ShelfState.QUEUE_KEY);
+    localStorage.removeItem(ShelfState.ACTIVE_JOB_KEY);
+    localStorage.removeItem('shelfConfig');
+    localStorage.removeItem('cellCapacities');
+    localStorage.removeItem('shelfId');
+    
+    // เคลียร์ state ใน memory
+    ShelfState.setQueue([]);
+    ShelfState.removeActiveJob();
+    ShelfServices.clearLED();
+    
+    // รีโหลด configuration
+    await ShelfServices.loadShelfConfig();
+    
+    // สร้าง shelf grid ใหม่
+    ShelfUI.refreshShelfGrid();
+    
+    // รีโหลด shelf state
+    await ShelfServices.refreshShelfStateFromServer();
+    
+    // รีเฟรช UI
+    ShelfQueue.renderAll();
+    
+    console.log('✅ Cache cleared and refreshed');
+}
+
+// ฟังก์ชันสำหรับใช้ใน HTML onclick handlers  
+function selectJob(jobId) {
+    console.log(`🎯 Selecting job: ${jobId}`);
+    ShelfQueue.selectJob(jobId);
+}
+
+function goBackToMain() {
+    console.log('🔙 กลับไปหน้าหลัก');
+    window.location.reload();
+}
+
+function handleLotSearch(lotNo) {
+    console.log(`🔍 ค้นหา LOT: ${lotNo}`);
+    // Implementation based on original ui_logic.js behavior
+    return false; // Placeholder
+}
+
+function onCellClick(cellId) {
+    console.log(`📱 Cell clicked: ${cellId}`);
+    return ShelfUI.handleCellClick?.(cellId) || false;
+}
+
 if (typeof window !== 'undefined') {
     window.ShelfApp = {
         initialize: initializeApplication,
         refresh: refreshApplication,
+        clearCacheAndRefresh,
         handleWebSocketMessage,
         setupEventListeners,
         setupConsoleUtilities
     };
+    
+    // Global functions for HTML onclick handlers
+    window.selectJob = selectJob;
+    window.goBackToMain = goBackToMain;
+    window.handleLotSearch = handleLotSearch;
+    window.onCellClick = onCellClick;
 }
 
 console.log('📱 Smart Shelf Application loaded');

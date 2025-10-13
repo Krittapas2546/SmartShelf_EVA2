@@ -12,13 +12,20 @@
 /**
  * แสดงผลหน้าหลักทั้งหมด (orchestration)
  */
-function renderAll() {
+async function renderAll() {
     const queue = ShelfState.getQueue();
     const activeJob = ShelfState.getActiveJob();
     const uiState = ShelfState.getUIState();
 
     // อัปเดตปุ่ม Queue Notification
     updateQueueNotificationButton();
+
+    // ตรวจสอบและโหลด configuration ถ้าจำเป็น
+    const config = ShelfState.getShelfConfig();
+    if (!config || Object.keys(config).length === 0) {
+        console.log('🔄 Loading shelf config before rendering...');
+        await ShelfServices.loadShelfConfig();
+    }
 
     // Logic สำหรับแสดงหน้าที่เหมาะสม
     if (uiState.showMainWithQueue) {
