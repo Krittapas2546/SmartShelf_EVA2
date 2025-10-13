@@ -1,10 +1,9 @@
-# 🏭 RFID Smart Shelf System - Complete Engineering Documentation
+# 📋 Smart Shelf System - Complete Engineering Documentation
 
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-green.svg)](https://fastapi.tiangolo.com)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-green.svg)](https://fastapi.tiangolo.com)
 [![WebSocket](https://img.shields.io/badge/WebSocket-Real--time-orange.svg)](https://websockets.spec.whatwg.org)
 [![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-5-red.svg)](https://raspberrypi.org)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-13+-blue.svg)](https://postgresql.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
 ## 📘 เกี่ยวกับเอกสารฉบับนี้
@@ -30,14 +29,15 @@
 ### 📚 ส่วนที่ 1: ภาพรวมและทฤษฎี (Overview & Theory)
 1. [ภาพรวมโปรเจกต์](#-1-ภาพรวมโปรเจกต์-project-overview)
 2. [สถาปัตยกรรมระบบ](#️-2-สถาปัตยกรรมระบบ-system-architecture)
-3. [เทคโนโลยีที่ใช้](#-3-เทคโนโลยีที่ใช้-technology-stack)
-4. [โครงสร้างโปรเจกต์](#-4-โครงสร้างโปรเจกต์-project-structure)
+3. [Requirements & Implementation Analysis](#-3-requirements--implementation-analysis)
+4. [เทคโนโลยีที่ใช้](#-4-เทคโนโลยีที่ใช้-technology-stack)
+5. [โครงสร้างโปรเจกต์](#-5-โครงสร้างโปรเจกต์-project-structure)
 
 ### ⚙️ ส่วนที่ 2: การพัฒนาและการทำงาน (Development & Implementation)
-5. [ฟีเจอร์หลัก](#-5-ฟีเจอร์หลัก-core-features)
-6. [การใช้งานระบบ](#-6-การใช้งานระบบ-system-usage-guide)
-7. [การติดตั้งและดำเนินการ](#️-7-การติดตั้งและดำเนินการ-installation--deployment)
-8. [API Documentation](#-8-api-documentation)
+6. [ฟีเจอร์หลัก](#-6-ฟีเจอร์หลัก-core-features)
+7. [การใช้งานระบบ](#-7-การใช้งานระบบ-system-usage-guide)
+8. [การติดตั้งและดำเนินการ](#️-8-การติดตั้งและดำเนินการ-installation--deployment)
+9. [API Documentation](#-9-api-documentation)
 
 ### 🔧 ส่วนที่ 3: เทคนิคขั้นสูง (Advanced Techniques)
 9. [Real-time Communication](#-9-real-time-communication-websocket)
@@ -58,7 +58,14 @@
 
 ## 🚀 1. ภาพรวมโปรเจกต์ (Project Overview)
 
-โปรเจกต์ **RFID Smart Shelf System** เป็นระบบจัดการชั้นวางอัจฉริยะที่พัฒนาขึ้นด้วยหลักการ **Full Stack Development** ครอบคลุมการพัฒนาทั้ง Backend API, Frontend UI, Real-time Communication และ Hardware Integration สำหรับใช้งานในโรงงานอุตสาหกรรมและคลังสินค้า
+**Smart Shelf System** เป็นระบบควบคุมชั้นวางอัจฉริยะสำหรับโรงงานผลิต รองรับการทำงาน **Place** (วางถาด) และ **Pick** (หยิบถาด) แบบเรียลไทม์ ด้วยการชี้ตำแหน่งผ่าน **LED** และตรวจสอบความถูกต้องด้วย **Barcode Scanner**
+
+ระบบออกแบบให้รองรับ:
+- 🏭 **Multi-Shelf Environment**: เชื่อมต่อหลายชั้นวางพร้อมกัน
+- 🌐 **Gateway Integration**: เชื่อมต่อกับ Central Gateway และ LMS
+- 📦 **Stacked Lots Management**: รองรับการซ้อนถาด (Lots) หลายชั้นในช่องเดียว
+- 🔄 **Auto-Recovery**: กู้คืนงานค้างหลังไฟดับ/รีสตาร์ท
+- 📊 **Real-time Monitoring**: แสดงสถานะชั้นวางและคิวงานแบบเรียลไทม์
 
 ### 🎯 วัตถุประสงค์หลัก
 
@@ -117,74 +124,29 @@ graph TB
 
 ## 🏛️ 2. สถาปัตยกรรมระบบ (System Architecture)
 
-### 2.1. ขอบเขตของระบบ (System Boundary) 
+### 2.1. Actors และ Use Cases
 
-ในโปรเจกต์นี้ **"ระบบที่ออกแบบ" (System under Discussion - SuD)** หมายถึง **Smart Shelf ทั้งตู้** ซึ่งเป็นระบบที่ทำงานได้ด้วยตัวเอง ประกอบด้วย:
+**Actors (ผู้มีส่วนเกี่ยวข้อง):**
 
-- **ฮาร์ดแวร์ควบคุม:** Raspberry Pi 5 Controller
-- **อุปกรณ์อินพุต/เอาต์พุต:** Barcode Scanner, LED Strips
-- **ซอฟต์แวร์:** FastAPI Backend, WebSocket Service, และ Frontend UI
+#### **👤 Operator (User)**
+- **ผู้ใช้งานหน้างาน** ที่สแกนบาร์โค้ดและใช้ UI
+- ดูคิวงานและสถานะชั้นวางแบบเรียลไทม์
+- ยืนยันงานด้วยการสแกนบาร์โค้ดตำแหน่ง
 
-ดังนั้น **Actors** จะเป็นสิ่งที่อยู่ **"ภายนอก"** ตู้ Smart Shelf ที่เข้ามามีปฏิสัมพันธ์กับระบบ
+#### **🏭 LMS (Location System Management)**
+- **ระบบจัดการตำแหน่ง** ที่ส่งคำสั่งงานมายังชั้นวาง
+- ตรวจสอบว่า shelf ที่ระบุเป็น Smart Shelf & Ready
+- รับ callback ผลงานและอัปเดตสถานะ
 
-### 2.2. Actors และ Use Cases
+#### **🌐 Central Gateway**
+- **ระบบจัดการกลาง** ที่จัดการ shelf หลายตัวพร้อมกัน
+- Route งานไปยัง shelf ที่ถูกต้องตาม shelf_ID
+- จัดการทะเบียนชั้นวางและค้นพบชั้นวางอัตโนมัติ
 
-### 📝 **คำอธิบายระบบภายนอกที่อาจเชื่อมต่อในอนาคต:**
-
-#### **🔶 MES (Manufacturing Execution System)**
-**คือ:** ระบบจัดการการผลิตระดับโรงงาน
-**หน้าที่:**
-- ควบคุมคิว งาน production orders
-- ติดตามสถานะการผลิตแบบ real-time
-- จัดการ work instructions และ quality data
-- Bridge ระหว่าง ERP กับอุปกรณ์ในไลน์ผลิต
-
-#### **🔶 ERP (Enterprise Resource Planning)**
-**คือ:** ระบบจัดการทรัพยากรองค์กรแบบรวม
-**หน้าที่:**
-- จัดการ inventory, purchasing, sales
-- วางแผน production planning
-- จัดการข้อมูลลูกค้า และ financial data
-- ระบบระดับ corporate level
-
-#### **🔶 PLC (Programmable Logic Controller)**
-**คือ:** อุปกรณ์ควบคุมอัตโนมัติในอุตสาหกรรม
-**หน้าที่:**
-- ควบคุมมอเตอร์, conveyor, sensors
-- ติดต่อกับอุปกรณ์ field level
-- Process control และ automation
-
----
-
-### 🚀 **Hardware Controller**
-
-#### **🥧 Raspberry Pi 5 Controller**
-```
-📍 ตำแหน่ง: Central controller ของระบบ
-🔧 หน้าที่:
-   • ควบคุม LED strips (WS2812B) 
-   • ประมวลผล RFID reader data
-   • เชื่อมต่อกับ FastAPI backend
-   • จัดการ GPIO pins สำหรับอุปกรณ์ต่างๆ
-   
-🔗 เชื่อมต่อ:
-   • SPI interface → LED strips
-   • UART/USB → RFID readers  
-   • Ethernet/WiFi → Network communication
-   • GPIO → Sensors และ indicators
-```
-
----
-
-### 🎯 **ระบบปัจจุบัน (LMS Integration)**
-
-**ระบบจริงของเรา:**
-- **LMS (Laboratory Management System)** เป็นหลัก
-- **Central Gateway** ทำหน้าที่ management layer
-- **Raspberry Pi 5** ทำหน้าที่ controller แต่ละชั้นวาง
-- **PostgreSQL Database** เก็บข้อมูล configuration และ logs
-- **ไม่มี PLC, MES, ERP** ในขณะนี้
-- เหมาะสำหรับ **laboratory/research environment**
+#### **🔧 Admin/Maintenance**
+- **ผู้ดูแลระบบ** ที่จัดการการตั้งค่าและแก้ไขปัญหา
+- กู้คืนงานค้างหลังไฟดับ/รีสตาร์ทและคัดทิ้งซ้ำ
+- รีเซ็ตสถานะ/ล้างคิวและดึง log/diagnostic
 
 ### 🌐 **Central Gateway Architecture**
 
@@ -221,37 +183,22 @@ PostgreSQL DB (43.72.20.238:5432)
 ### 2.1. LMS-Focused Architecture (ระบบจริงปัจจุบัน)
 
 #### 2.1.1. System Context Diagram
-```mermaid
-C4Context
-    title System Context - RFID Smart Shelf Ecosystem with Central Gateway
-   
-    Person(operator, "Shop Floor Operator", "Uses barcode scanner and web interface to manage inventory")
-    Person(engineer, "Process Engineer", "Monitors system performance and configurations") 
-    Person(manager, "Production Manager", "Reviews reports and system analytics")
-    Person(admin, "System Admin", "Manages central gateway and database")
-    
-    System(smartShelf, "Smart Shelf System", "Individual shelf controller<br/>IP: 192.168.1.xxx:8000<br/>IoT-enabled inventory management")
-    
-    System(gateway, "Central Gateway", "Management Layer<br/>IP: 43.72.20.238:5000<br/>- Route jobs to multiple shelves<br/>- Monitor shelf status<br/>- PostgreSQL integration")
-    
-    SystemDb(postgres, "PostgreSQL Database", "Central Storage<br/>IP: 43.72.20.238:5432<br/>- IoT_ShelfMaster<br/>- IoT_SystemLog<br/>- IoT_JobQueue")
-    
-    System_Ext(lms, "LMS System", "Laboratory Management System<br/>IP: 43.72.20.146:80<br/>sends job commands and manages laboratory workflows")
-    System_Ext(backup, "Future Systems", "Optional: Future integration with MES/ERP systems")
-    
-    Rel(operator, smartShelf, "Scans barcodes, monitors UI", "HTTPS/WebSocket")
-    Rel(engineer, smartShelf, "Configures shelf parameters", "HTTPS/REST API")
-    Rel(manager, smartShelf, "Views dashboards", "HTTPS")
-    Rel(admin, gateway, "Manages central system", "HTTPS/REST API")
-    
-    Rel(lms, gateway, "Sends job commands with shelf_ID", "HTTP/REST API")
-    Rel(gateway, smartShelf, "Routes jobs to specific shelf", "HTTP/REST API")
-    Rel(gateway, postgres, "Stores configs & logs", "PostgreSQL")
-    Rel(smartShelf, gateway, "Job completion callbacks", "HTTP callbacks")
-    Rel(smartShelf, backup, "[Future] Enterprise sync", "REST API/JSON")
-    
-    UpdateLayoutConfig($c4ShapeInRow="3", $c4BoundaryInRow="2")
-```
+
+> **หมายเหตุ**: ส่วนนี้อยู่ระหว่างการรวบรวมข้อมูลจากผู้เชี่ยวชาญเพื่อให้ได้สถาปัตยกรรมที่ถูกต้องและสมบูรณ์
+
+**ระบบปัจจุบันประกอบด้วย:**
+
+- **LMS (Location System Management)**: ระบบจัดการตำแหน่งหลัก
+- **Central Gateway**: ระบบจัดการกลางที่ route งานไปยัง shelf ต่างๆ
+- **Smart Shelf**: ระบบควบคุมชั้นวางแต่ละตัว (ระบบนี้)
+- **Operator (User)**: ผู้ใช้งานที่สแกนบาร์โค้ดและใช้ UI
+- **Admin**: ผู้ดูแลระบบ
+
+**การเชื่อมต่อหลัก:**
+- LMS → Gateway: ส่งคำสั่งงาน
+- Gateway → Shelf: Route งานไปยัง shelf ที่ถูกต้อง
+- Shelf → Gateway: ส่ง callback ผลงาน
+- Operator → Shelf: ใช้ UI และสแกนบาร์โค้ด
 
 #### 2.1.2. Container Architecture Diagram
 ```mermaid
@@ -500,40 +447,36 @@ graph TB
 
 ### 2.5. Security Architecture
 
-#### 2.5.1. Security Layer Design
-```mermaid
-graph TB
-    subgraph "🔐 Security Layers"
-        subgraph "Network Security"
-            FIREWALL[Firewall Rules<br/>Port 8000, SSH]
-            VPN[VPN Access<br/>Remote management]
-            HTTPS[HTTPS/TLS<br/>Encrypted transport]
-        end
-        
-        subgraph "Application Security"
-            AUTH[Authentication<br/>API keys, Basic auth]
-            VALID[Input Validation<br/>Pydantic models]
-            CORS[CORS Policy<br/>Cross-origin control]
-            RATE[Rate Limiting<br/>API throttling]
-        end
-        
-        subgraph "System Security"
-            USER[User Privileges<br/>Non-root execution]
-            LOGS[Security Logging<br/>Audit trails]
-            UPDATE[System Updates<br/>Security patches]
-            BACKUP[Configuration Backup<br/>Recovery procedures]
-        end
-        
-        subgraph "Hardware Security"
-            PHYSICAL[Physical Security<br/>Enclosure, locks]
-            GPIO_PROT[GPIO Protection<br/>Over-current protection]
-            POWER[Power Management<br/>UPS, surge protection]
-        end
-    end
-    
-    classDef security fill:#e74c3c,stroke:#c0392b,color:#fff
-    class FIREWALL,VPN,HTTPS,AUTH,VALID,CORS,RATE,USER,LOGS,UPDATE,BACKUP,PHYSICAL,GPIO_PROT,POWER security
-```
+#### **NFR-SEC-01**: Authentication & Authorization 🚧
+- **Current**: ไม่มี authentication 
+- **Requirement**: JWT tokens สำหรับ API access
+- **Implementation**: Middleware ใน FastAPI router
+
+#### **NFR-SEC-02**: Network Security ⚠️
+- **Current**: HTTP connections 
+- **Requirement**: TLS/HTTPS สำหรับการสื่อสารทั้งหมด
+- **Implementation**: SSL certificates + reverse proxy (nginx/traefik)
+
+#### **NFR-SEC-03**: Data Protection ⚠️
+- **Current**: Plain text communication
+- **Requirement**: Encrypt sensitive data (job details, lot numbers)
+- **Implementation**: AES encryption ใน data layer
+
+#### **NFR-SEC-04**: Access Control ⚠️
+- **Current**: ไม่มี role-based access
+- **Requirement**: Principle of least privilege (Operator/Admin/LMS roles)
+- **Implementation**: RBAC middleware with permission checks
+
+#### **NFR-SEC-05**: Audit & Monitoring ✅
+- **Current**: Basic logging implemented
+- **Requirement**: Security audit logs, intrusion detection
+- **Enhancement**: Structured security logging with event classification
+
+**Current Security Measures:**
+- ✅ **Input Validation**: Pydantic models validate all API inputs
+- ✅ **Exception Handling**: Proper error handling without information leakage  
+- ✅ **Physical Security**: GPIO-controlled access to LED hardware
+- ⚠️ **Network Security**: Limited to local network access (no public exposure)
 
 ### 2.6. Integration Architecture
 
@@ -585,7 +528,136 @@ flowchart TB
 
 ---
 
-## 🔧 3. เทคโนโลยีที่ใช้ (Technology Stack)
+## � 3. Requirements & Implementation Analysis
+
+### 3.1 Functional Requirements (แยกตามผู้มีส่วนได้ส่วนเสีย)
+
+#### 3.1.1 Operator (ผู้ใช้งานหน้างาน)
+
+**FR-OP-01**: ดูคิวงานและสถานะชั้นวางแบบเรียลไทม์ (ช่องว่าง/มีของ/กำลังทำงาน)
+- **Acceptance Criteria**: UI อัปเดตภายใน <1s หลังมี event ✅
+- **Implementation**: WebSocket (`/ws`) + UI real-time updates
+- **Code Location**: `api/websockets.py`, `templates/shelf_ui.html`
+
+**FR-OP-02**: ระบบชี้ตำแหน่งด้วย LED เมื่อเริ่มงาน Place/Pick
+- **Acceptance Criteria**: คำสั่ง→LED <100ms (avg) ✅
+- **Implementation**: `POST /api/led` (single/batch LED control)
+- **Code Location**: `core/led_controller.py`, `api/jobs.py`
+
+**FR-OP-03**: ยืนยันงานด้วยการสแกนบาร์โค้ดตำแหน่ง
+- **Acceptance Criteria**: ถูก=LED ฟ้า + บันทึก log; ผิด=LED แดง + ข้อความเตือน ✅
+- **Implementation**: `POST /command/{job_id}/complete` + LED feedback
+- **Code Location**: `api/jobs.py`, WebSocket broadcast
+
+**FR-OP-04**: แจ้งข้อผิดพลาด/ข้อยกเว้นและมีวิธีสำรอง (manual input)
+- **Acceptance Criteria**: ต้องมี double-confirm + ลง log ✅
+- **Implementation**: `POST /command/{job_id}/error` + UI error modal
+- **Code Location**: `api/jobs.py`, WebSocket error handling
+
+#### 3.1.2 LMS / Central Gateway
+
+**FR-LMS-01**: ส่งคำสั่งงานไปยังชั้นวางที่ระบุ (shelf_id)
+- **Acceptance Criteria**: ใช้ idempotency; ส่งซ้ำไม่เกิดงานซ้ำ ✅
+- **Implementation**: `POST /command` (JobRequest with shelf_id + biz)
+- **Code Location**: `api/jobs.py` (create_job_via_api)
+
+**FR-LMS-02**: ยกเลิก/เคลียร์คำสั่งของชั้นวางได้โดยไม่บล็อกงานอื่น
+- **Acceptance Criteria**: ไม่บล็อกงานอื่น ✅
+- **Implementation**: `POST /clearCommand` (ยกเลิกงานตาม lot_no)
+- **Code Location**: `api/jobs.py` (clear_command_from_gateway)
+
+**FR-LMS-03**: ตรวจสอบว่า shelf ที่ระบุเป็น Smart Shelf & Ready ก่อนส่งงาน
+- **Acceptance Criteria**: ระบบตรวจสอบ shelf_id และ lot_no กับ LMS ก่อนรับงาน ✅
+- **Implementation**: `POST /api/shelf/askCorrectShelf` → Gateway → LMS
+- **Code Location**: `api/jobs.py` (ask_correct_shelf)
+
+**FR-LMS-04**: จัดการทะเบียนชั้นวาง (เพิ่ม/แก้ไข shelf_id, ชื่อ, IP, สถานะ)
+- **Acceptance Criteria**: ระบบ auto-detect shelf_id จาก IP ✅
+- **Implementation**: `GET /ShelfName` (auto-register with Gateway by IP)
+- **Code Location**: `api/jobs.py`, main.py (startup initialization)
+
+**FR-LMS-05**: รับ callback ผลงานและอัปเดตสถานะ
+- **Acceptance Criteria**: ส่งข้อมูล ShelfComplete (biz, shelf_id, lot_no, status) ไป Gateway ✅
+- **Implementation**: `POST /command/{job_id}/complete` → Gateway ShelfComplete API
+- **Code Location**: `api/jobs.py` (send_shelf_complete_to_gateway)
+
+#### 3.1.3 Admin / Maintenance
+
+**FR-ADM-01**: ค้นพบชั้นวางอัตโนมัติจาก IP ผ่าน Gateway
+- **Acceptance Criteria**: แม็พ local IP → shelf_id/shelf_name ✅
+- **Implementation**: `GET /ShelfName` (auto-called during startup)
+- **Code Location**: `main.py` (initialize_shelf_info)
+
+**FR-ADM-02**: กู้คืนงานค้างหลังไฟดับ/รีสตาร์ทและคัดทิ้งซ้ำ (deduplicate)
+- **Acceptance Criteria**: Deduplicate โดยตรวจสอบ lot_no + level + block ✅
+- **Implementation**: `GET /api/shelf/pending` + `POST /api/shelf/pending/load`
+- **Code Location**: `api/jobs.py`
+
+**FR-ADM-03**: รีเซ็ตสถานะ/ล้างคิวเพื่อแก้ปัญหาได้
+- **Acceptance Criteria**: ล้าง jobs queue + reset shelf_state ✅
+- **Implementation**: `POST /api/system/reset`
+- **Code Location**: `api/jobs.py` (reset_system)
+
+**FR-ADM-04**: ดึง log/diagnostic จาก Gateway/Device
+- **Acceptance Criteria**: มี log ครบทุก event (job creation, completion, error) ✅
+- **Implementation**: Local logging (all events logged to console)
+- **Code Location**: Throughout codebase
+
+**FR-ADM-05**: ปรับจำนวนชั้น/บล็อก/tray ของ shelf ได้
+- **Acceptance Criteria**: อัปเดต SHELF_CONFIG + CELL_CAPACITIES จาก Gateway ✅
+- **Implementation**: `POST /api/shelf/layout` (fetch/sync layout from Gateway)
+- **Code Location**: `api/jobs.py`, `core/database.py`
+
+### 3.2 Non-Functional Requirements (NFR)
+
+**NFR-AVAIL**: พร้อมใช้งาน 24×7, auto-start/auto-reconnect เมื่อรีบูตหรือเน็ตหลุด; WS reconnect ~3s ✅
+
+**NFR-SCALE**: รองรับหลายชั้นวางพร้อมกัน และ scale Gateway แยกจาก Shelf Controller (แนวนอน) ✅
+
+**NFR-MAINT**: ตั้งค่าผ่าน ENV/ไฟล์, แยกเลเยอร์ชัด (UI/API/Device), API versioning รองรับ backward compatibility ✅
+
+**NFR-I18N**: UI รองรับ 3 ภาษา (ไทย/อังกฤษ/ญี่ปุ่น) สลับได้โดยไม่รีเฟรช 🚧
+
+**NFR-SEC**: Authentication/JWT, TLS (หากเชื่อมผ่านเครือข่ายองค์กร), principle of least privilege 🚧
+
+**NFR-OBS**: มี logging/metrics/healthcheck ครบ (พร้อมระดับ log) ✅
+
+### 3.3 Implementation Status & Code Mapping
+
+| Requirements | Status | Code Location | Key Functions |
+|-------------|--------|---------------|---------------|
+| **FR-OP-01** (Real-time UI) | ✅ | `api/websockets.py` | `websocket_endpoint()` |
+| **FR-OP-02** (LED Position) | ✅ | `core/led_controller.py` | `control_led()`, `batch_control()` |
+| **FR-OP-03** (Barcode Scan) | ✅ | `api/jobs.py` | `complete_job()` |
+| **FR-LMS-01** (Job Creation) | ✅ | `api/jobs.py` | `create_job_via_api()` |
+| **FR-LMS-03** (Shelf Validation) | ✅ | `api/jobs.py` | `ask_correct_shelf()` |
+| **FR-LMS-05** (Callback) | ✅ | `api/jobs.py` | `send_shelf_complete_to_gateway()` |
+| **FR-ADM-01** (Auto-discovery) | ✅ | `main.py` | `initialize_shelf_info()` |
+| **FR-ADM-02** (Recovery) | ✅ | `api/jobs.py` | `get_pending_jobs()` |
+| **NFR-AVAIL** (24x7) | ✅ | `main.py` | `auto_start_functions()` |
+| **NFR-I18N** (Multi-language) | 🚧 | `templates/` | UI enhancement needed |
+| **NFR-SEC** (Security) | 🚧 | TBD | Authentication layer needed |
+
+### 3.4 Technical Architecture Validation
+
+#### ✅ **Verified Components**
+- **FastAPI Framework**: REST API + WebSocket support
+- **In-memory Database**: Dynamic shelf configuration  
+- **LED Hardware Control**: GPIO integration with fallback
+- **Gateway Integration**: Bidirectional API communication
+- **Real-time Updates**: WebSocket broadcasting
+- **Error Handling**: Comprehensive exception management
+
+#### 🚧 **Components Needing Enhancement**  
+- **Authentication System**: JWT implementation required
+- **Internationalization**: Multi-language UI support
+- **Security Hardening**: TLS, encryption, RBAC
+- **Performance Monitoring**: Metrics and alerting
+- **Documentation**: API documentation (Swagger/OpenAPI)
+
+---
+
+## �🔧 4. เทคโนโลยีที่ใช้ (Technology Stack)
 
 ### 3.1. Backend Technologies
 
