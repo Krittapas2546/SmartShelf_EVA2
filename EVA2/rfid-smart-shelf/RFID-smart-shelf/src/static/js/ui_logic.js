@@ -657,9 +657,9 @@ function getCellCapacity(level, block) {
                 clearTimeout(autoReturnTimer);
             }
             
-            console.log('⏱️ Starting auto-return timer (7 seconds)');
+            // console.log('⏱️ Starting auto-return timer (7 seconds)');
             autoReturnTimer = setTimeout(() => {
-                console.log('🔄 Auto-returning to queue selection due to inactivity');
+                // console.log('🔄 Auto-returning to queue selection due to inactivity');
                 const queue = getQueue();
                 if (queue.length > 0) {
                     showMainWithQueue = false;
