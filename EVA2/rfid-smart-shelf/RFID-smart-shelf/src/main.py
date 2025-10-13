@@ -21,18 +21,23 @@ app = FastAPI(
 
 # ฟังก์ชันเรียกใช้ตอนเริ่มต้นระบบ
 async def initialize_shelf_info():
-    """เรียก /ShelfName เพื่อดึงข้อมูล shelf_id และเก็บไว้ใน global variable"""
+    """เรียกใช้ฟังก์ชัน get_shelf_info_endpoint โดยตรงแทนการเรียก HTTP"""
     try:
         print("🔄 Initializing shelf information...")
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get("http://localhost:8000/ShelfName")
-            if response.status_code == 200:
-                data = response.json()
-                print(f"✅ Shelf initialized: {data.get('shelf_id')} ({data.get('shelf_name')})")
-                return True
-            else:
-                print(f"⚠️ Failed to initialize shelf info: {response.status_code}")
-                return False
+        # Import ฟังก์ชันที่จำเป็น
+        from api.jobs import get_shelf_info_endpoint
+        
+        # เรียกฟังก์ชันโดยตรงแทนการเรียก HTTP
+        result = await get_shelf_info_endpoint()
+        
+        if result.get("success"):
+            shelf_id = result.get("shelf_id")
+            shelf_name = result.get("shelf_name")
+            print(f"✅ Shelf initialized: {shelf_id} ({shelf_name})")
+            return True
+        else:
+            print(f"⚠️ Failed to initialize shelf info: {result.get('error', 'Unknown error')}")
+            return False
     except Exception as e:
         print(f"❌ Error initializing shelf info: {e}")
         return False
@@ -132,8 +137,8 @@ async def initialize_shelf_state():
 @app.on_event("startup")
 async def startup_event():
     """เรียกใช้ฟังก์ชัน initialization เมื่อแอปพลิเคชันเริ่มต้น"""
-    # รอสักครู่ให้เซิร์ฟเวอร์เริ่มต้นเสร็จก่อน
-    await asyncio.sleep(2)
+    # รอสักครู่ให้เซิร์ฟเวอร์เริ่มต้นเสร็จก่อน (ลดเวลาลง)
+    await asyncio.sleep(1)
     
     # Migration: เพิ่ม biz field ให้กับ lots ที่มีอยู่แล้ว
     from core.database import migrate_existing_lots_add_biz

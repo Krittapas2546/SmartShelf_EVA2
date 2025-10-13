@@ -679,11 +679,9 @@ async def create_job_via_api(job: JobRequest):
     new_job = job.dict()
     new_job["shelf_id"] = shelf_id  # ใช้ shelf_id จาก global หรือ request
     
-    # เพิ่ม tray_count default ถ้าไม่มี
-    if "tray_count" not in new_job:
-        new_job["tray_count"] = 1
-    else:
-        new_job["tray_count"] = int(new_job.get("tray_count", 1))
+    # เพิ่ม covertray (+1) ให้กับ tray_count ที่ส่งมา
+    original_tray_count = int(new_job.get("tray_count", 1))
+    new_job["tray_count"] = original_tray_count + 1  # เพิ่ม covertray
     
     DB["job_counter"] += 1
     new_job["jobId"] = f"job_{DB['job_counter']}"
@@ -712,7 +710,7 @@ async def complete_job(job_id: str):
     level = int(job["level"])
     block = int(job["block"])
     lot_no = job["lot_no"]
-    tray_count = int(job.get("tray_count", 1))
+    tray_count = int(job.get("tray_count", 1))  # ใช้ค่าที่มี covertray รวมอยู่แล้ว
     biz = job["biz"]
     shelf_id = job.get("shelf_id", "UNKNOWN")
     
@@ -1041,7 +1039,7 @@ async def get_pending_jobs_from_gateway():
                             "level": gateway_job.get("level"),
                             "block": gateway_job.get("block"),
                             "place_flg": gateway_job.get("place_flg"),
-                            "tray_count": gateway_job.get("tray_count"),
+                            "tray_count": (gateway_job.get("tray_count") or 1) + 1,  # covertray
                             "status": gateway_job.get("status"),
                             "biz": gateway_job.get("biz", "Unknown"),
                             "shelf_id": shelf_id,
@@ -1114,22 +1112,34 @@ async def load_pending_jobs_into_queue():
     ใช้สำหรับการกู้คืนงานหลังจากไฟดับหรือรีสตาร์ทระบบ
     """
     try:
+        print("🔄 Loading pending jobs from Gateway...")
+        
         # เรียกใช้ฟังก์ชันดึงงานที่ค้างอยู่
         pending_response = await get_pending_jobs_from_gateway()
+        print(f"📦 Pending response type: {type(pending_response)}")
+        print(f"📦 Pending response: {pending_response}")
         
         # ตรวจสอบว่าได้ response ที่ถูกต้องหรือไม่
         if isinstance(pending_response, JSONResponse):
-            # ถ้าเป็น error response ให้ return เลย
-            return pending_response
+            # ถ้าเป็น error response แต่ไม่ใช่ server error critical ให้ return success แต่ไม่มีงาน
+            print("⚠️ Gateway unavailable, continuing with empty pending jobs")
+            return {
+                "status": "success",
+                "message": "Gateway unavailable, no pending jobs loaded",
+                "loaded_count": 0,
+                "skipped_count": 0,
+                "total_queue_size": len(DB["jobs"])
+            }
         
         if pending_response.get("status") != "success":
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error": "Failed to get pending jobs",
-                    "message": pending_response.get("message", "Unknown error")
-                }
-            )
+            print("⚠️ Gateway returned non-success status, continuing with empty pending jobs")
+            return {
+                "status": "success", 
+                "message": f"Gateway error: {pending_response.get('message', 'Unknown error')}",
+                "loaded_count": 0,
+                "skipped_count": 0,
+                "total_queue_size": len(DB["jobs"])
+            }
         
         pending_jobs = pending_response.get("jobs", [])
         
@@ -1150,8 +1160,8 @@ async def load_pending_jobs_into_queue():
             # ตรวจสอบงานซ้ำ (lot_no, level, block) เท่านั้น ไม่สนใจ gateway_job_id
             job_exists = any(
                 job["lot_no"] == pending_job["lot_no"] and
-                job["level"] == pending_job["level"] and
-                job["block"] == pending_job["block"]
+                str(job["level"]) == str(pending_job["level"]) and
+                str(job["block"]) == str(pending_job["block"])
                 for job in DB["jobs"]
             )
             
@@ -1169,8 +1179,8 @@ async def load_pending_jobs_into_queue():
             for job in pending_jobs[-loaded_count:]:  # ส่งเฉพาะงานที่เพิ่มจริง
                 if not any(
                     existing_job["lot_no"] == job["lot_no"] and
-                    existing_job["level"] == job["level"] and
-                    existing_job["block"] == job["block"]
+                    str(existing_job["level"]) == str(job["level"]) and
+                    str(existing_job["block"]) == str(job["block"])
                     for existing_job in DB["jobs"][:-loaded_count]  # ไม่นับงานที่เพิ่มใหม่
                 ):
                     await manager.broadcast(json.dumps({
@@ -1188,12 +1198,18 @@ async def load_pending_jobs_into_queue():
         }
         
     except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"❌ Error in load_pending_jobs_into_queue: {e}")
+        print(f"📊 Traceback: {error_trace}")
+        
         return JSONResponse(
             status_code=500,
             content={
                 "error": "Failed to load pending jobs",
                 "status": "server_error",
-                "message": str(e)
+                "message": str(e),
+                "traceback": error_trace
             }
         )
 
