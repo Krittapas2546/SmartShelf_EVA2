@@ -3034,9 +3034,9 @@ async function initializeShelfName() {
                 console.warn('⚠️ ไม่ได้รับ shelf_id จาก Gateway');
             }
             
-            if (data.success && data.shelf_name) {
+            if (data.success && data.shelf_id) {
                 // แปลงชื่อเป็นตัวพิมพ์ใหญ่
-                const shelfDisplayName = data.shelf_name.toUpperCase();
+                const shelfDisplayName = data.shelf_id.toUpperCase();
                 
                 // อัพเดทชื่อใน UI
                 const shelfTitle = document.getElementById('shelfTitle');
@@ -3047,7 +3047,7 @@ async function initializeShelfName() {
                     console.warn('⚠️ ไม่พบ element #shelfTitle');
                 }
             } else {
-                console.warn('⚠️ ไม่ได้รับ shelf_name จาก Gateway');
+                console.warn('⚠️ ไม่ได้รับ shelf_id จาก Gateway');
                 console.log('📄 Response data:', data);
             }
         } else {

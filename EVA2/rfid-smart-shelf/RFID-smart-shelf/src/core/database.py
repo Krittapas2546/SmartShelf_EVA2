@@ -374,7 +374,7 @@ def log_current_layout():
         print("   (Empty)")
     
     # 3. DYNAMIC_LAYOUT from Gateway
-    #print(f"🌐 DYNAMIC_LAYOUT from Gateway ({len(DYNAMIC_LAYOUT)} positions):")
+    print(f"🌐 DYNAMIC_LAYOUT from Gateway ({len(DYNAMIC_LAYOUT)} positions):")
     if DYNAMIC_LAYOUT:
         for level in sorted(set(int(info.get('level', '1')) for info in DYNAMIC_LAYOUT.values())):
             level_layout = {k: v for k, v in DYNAMIC_LAYOUT.items() if int(v.get('level', '1')) == level}

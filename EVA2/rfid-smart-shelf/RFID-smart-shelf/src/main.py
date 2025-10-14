@@ -32,8 +32,7 @@ async def initialize_shelf_info():
         
         if result.get("success"):
             shelf_id = result.get("shelf_id")
-            shelf_name = result.get("shelf_name")
-            print(f"✅ Shelf initialized: {shelf_id} ({shelf_name})")
+            print(f"✅ Shelf initialized: {shelf_id}")
             return True
         else:
             print(f"⚠️ Failed to initialize shelf info: {result.get('error', 'Unknown error')}")
@@ -54,8 +53,8 @@ async def initialize_shelf_layout():
         # ตรวจสอบว่ามี shelf_id แล้วหรือไม่
         shelf_id = GLOBAL_SHELF_INFO.get("shelf_id")
         if not shelf_id:
-            print("⚠️ No shelf_id available, using default PC2")
-            shelf_id = "PC2"
+            print("⚠️ No shelf_id available from Gateway, skipping layout initialization")
+            return False
             
         # ดึง layout จาก Gateway
         layout_data = await fetch_layout_from_gateway(shelf_id)
@@ -146,9 +145,15 @@ async def startup_event():
     
     # Initialize shelf info first
     shelf_init_success = await initialize_shelf_info()
+    print(f"🔍 DEBUG: Shelf init success = {shelf_init_success}")
     
-    # Initialize layout configuration from Gateway
-    layout_init_success = await initialize_shelf_layout()
+    # Initialize layout configuration from Gateway (only if shelf info succeeded)
+    if shelf_init_success:
+        layout_init_success = await initialize_shelf_layout()
+        #print(f"🔍 DEBUG: Layout init success = {layout_init_success}")
+    else:
+        layout_init_success = False
+        #print(f"⚠️ Skipping layout initialization due to shelf info failure")
     
     # Then initialize shelf state (requires shelf_id and layout)
     if shelf_init_success:

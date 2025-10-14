@@ -12,7 +12,7 @@ from datetime import datetime
 from core.led_controller import set_led
 
 # --- Import จากไฟล์ที่เราสร้างขึ้น ---
-from core.models import JobRequest, ErrorRequest, LEDPositionRequest, LEDPositionsRequest, LEDClearAndBatch, LMSCheckShelfRequest, LMSCheckShelfResponse, ShelfComplete, ShelfState, BlockState, LotData, LayoutRequest, LayoutResponse, SlotData
+from core.models import JobRequest, ErrorRequest, LEDPositionRequest, LEDPositionsRequest, LEDClearAndBatch, LMSCheckShelfRequest, LMSCheckShelfResponse, ShelfComplete, ShelfState, BlockState, LotData, LayoutRequest, LayoutResponse, SlotData, GatewayLEDcommand
 from core.database import (
     DB, get_job_by_id, get_lots_in_position, add_lot_to_position, remove_lot_from_position, update_lot_quantity, validate_position, get_shelf_info, SHELF_CONFIG, update_lot_biz, get_cell_capacity, update_layout_from_gateway, get_layout_info, is_layout_loaded_from_gateway, log_current_layout, get_layout_status
 )
@@ -25,7 +25,6 @@ GATEWAY_BASE_URL = "http://43.72.20.238:8000"  # Gateway server URL
 # Global shelf information (filled during startup)
 GLOBAL_SHELF_INFO = {
     "shelf_id": None,
-    "shelf_name": None,
     "local_ip": None
 }
 
@@ -55,13 +54,21 @@ async def fetch_layout_from_gateway(shelf_id: str = None):
     ดึงข้อมูล layout (ความจุและการกำหนดค่าช่องวาง) จาก Gateway
     """
     try:
-        if not shelf_id:
-            shelf_id = GLOBAL_SHELF_INFO.get("shelf_id", "PC2")
+        print(f"🔍 DEBUG: Input shelf_id = {shelf_id}")
+        print(f"🔍 DEBUG: GLOBAL_SHELF_INFO = {GLOBAL_SHELF_INFO}")
+        
+        # ใช้ global shelf_id เสมอถ้ามีข้อมูล
+        global_shelf_id = GLOBAL_SHELF_INFO.get("shelf_id")
+        if global_shelf_id:
+            shelf_id = global_shelf_id
+            print(f"🔍 DEBUG: Using global shelf_id = {shelf_id}")
+        elif not shelf_id:
+            shelf_id = "UNKNOWN"
+            print(f"🔍 DEBUG: No global shelf_id, using fallback = {shelf_id}")
         
         gateway_payload = {
             "shelf_id": shelf_id,
-            "update_flg": "0",  # อ่านข้อมูล
-            "slots": {}
+            "update_flg": "0"  # อ่านข้อมูล
         }
         
         headers = {
@@ -101,7 +108,7 @@ async def sync_layout_to_gateway(layout_data: dict, shelf_id: str = None):
     """
     try:
         if not shelf_id:
-            shelf_id = GLOBAL_SHELF_INFO.get("shelf_id", "PC2")
+            shelf_id = GLOBAL_SHELF_INFO.get("shelf_id", "UNKNOWN")
         
         gateway_payload = {
             "shelf_id": shelf_id,
@@ -389,6 +396,92 @@ async def clear_leds():
         return JSONResponse(status_code=500, content={"error": "LED clear failed", "detail": str(e)})
 
 
+@router.post("/api/led/control", tags=["LED Control"])
+async def led_control_by_level_block(request: GatewayLEDcommand):
+    """
+    Simple LED Control - Single LED only with Color Name
+    
+    ## Example:
+    ```json
+    {
+        "level": "1",
+        "block": "2", 
+        "color": "blue"
+    }
+    ```
+    
+    ## Supported Colors:
+    - "red", "green", "blue", "yellow", "purple", "orange", "white", "off", "black"
+    """
+    
+    def get_color_rgb(color_name):
+        """แปลงชื่อสีเป็น RGB values"""
+        color_map = {
+            "red": (255, 0, 0),
+            "green": (0, 255, 0), 
+            "blue": (0, 0, 255),
+            "yellow": (255, 255, 0),
+            "purple": (128, 0, 128),
+            "orange": (255, 165, 0),
+            "white": (255, 255, 255),
+            "off": (0, 0, 0),
+            "black": (0, 0, 0)
+        }
+        return color_map.get(color_name.lower(), (255, 255, 255))  # default white
+    
+    try:
+        # รับข้อมูลจาก Pydantic model
+        level = int(request.level)
+        block = int(request.block)
+        color_name = request.color
+        
+        # ตรวจสอบว่ามีการระบุสีหรือไม่
+        if not color_name:
+            return JSONResponse(status_code=400, content={
+                "error": "Missing color information",
+                "message": "Must provide 'color' field with color name"
+            })
+        
+        # แปลงชื่อสีเป็น RGB
+        r, g, b = get_color_rgb(color_name)
+        
+        # ตรวจสอบตำแหน่ง
+        if not validate_position(level, block):
+            return JSONResponse(status_code=400, content={
+                "error": "Invalid position",
+                "message": f"Position L{level}B{block} not found in shelf config"
+            })
+        
+        # ควบคุม LED
+        result = set_led(level, block, r, g, b)
+        
+        if not result.get("ok", False):
+            return JSONResponse(status_code=500, content={
+                "error": "LED control failed",
+                "message": result.get("error", "Unknown error"),
+                "position": f"L{level}B{block}"
+            })
+        
+        hex_color = f"#{r:02x}{g:02x}{b:02x}"
+        print(f"💡 LED: L{level}B{block} = {color_name} ({hex_color}) ✅")
+        
+        return {
+            "ok": True,
+            "level": level,
+            "block": block,
+            "position": f"L{level}B{block}",
+            "color_name": color_name,
+            "rgb": {"r": r, "g": g, "b": b},
+            "hex": hex_color
+        }
+        
+    except Exception as e:
+        return JSONResponse(status_code=400, content={
+            "error": "Request processing failed",
+            "detail": str(e)
+        })
+
+
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
 def serve_shelf_ui(request: Request):
     return templates.TemplateResponse("shelf_ui.html", {"request": request})
@@ -563,6 +656,39 @@ async def ask_correct_shelf(request: LMSCheckShelfRequest):
 @router.get("/command", tags=["Jobs"])
 def get_all_jobs():
     return {"jobs": DB["jobs"]}
+
+@router.get("/api/shelf/config", tags=["Shelf Configuration"])
+def get_shelf_config():
+    """
+    ดึงข้อมูล configuration ของชั้นวาง
+    """
+    try:
+        from core.database import get_shelf_info, SHELF_CONFIG
+        
+        shelf_info = get_shelf_info()
+        
+        return {
+            "status": "success",
+            "shelf_id": GLOBAL_SHELF_INFO.get("shelf_id", "UNKNOWN"),
+            "local_ip": GLOBAL_SHELF_INFO.get("local_ip", get_actual_local_ip()),
+            "config": {
+                "levels": shelf_info.get("levels", 2),
+                "blocks_per_level": shelf_info.get("blocks_per_level", 8),
+                "total_positions": shelf_info.get("total_positions", 16)
+            },
+            "layout": SHELF_CONFIG,
+            "message": "Shelf configuration retrieved successfully"
+        }
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": "Failed to retrieve shelf configuration",
+                "error": str(e)
+            }
+        )
 
 @router.get("/api/shelf/state", tags=["Jobs"])
 def get_shelf_state():
@@ -971,7 +1097,6 @@ async def get_pending_jobs_from_gateway():
                     
                     # อัพเดท global
                     GLOBAL_SHELF_INFO["shelf_id"] = shelf_id
-                    GLOBAL_SHELF_INFO["shelf_name"] = data.get("shelf_name")
                     GLOBAL_SHELF_INFO["local_ip"] = local_ip
                     
                     print(f"✅ Got shelf_id: {shelf_id}")
@@ -1195,7 +1320,7 @@ async def manage_shelf_layout(layout_request: LayoutRequest):
     จัดการ layout ของชั้นวาง - ดึงข้อมูลจาก Gateway และอัปเดต local database
     
     Parameters:
-    - shelf_id: รหัสชั้นวาง (เช่น "PC2")
+    - shelf_id: รหัสชั้นวาง (ดึงจาก Gateway หรือใช้ global shelf_id)
     - update_flg: "0" = อ่านข้อมูล, "1" = เขียนข้อมูล
     - slots: ข้อมูล layout (ใช้เมื่อ update_flg = "1")
     
@@ -1203,11 +1328,13 @@ async def manage_shelf_layout(layout_request: LayoutRequest):
     - Layout configuration พร้อมข้อมูล capacity และ active status
     """
     try:
-        shelf_id = layout_request.shelf_id
+        # ใช้ global shelf_id แทนการรับจาก request
+        shelf_id = GLOBAL_SHELF_INFO.get("shelf_id", "UNKNOWN")
         update_mode = layout_request.update_flg
         slots_data = layout_request.slots
         
-        print(f"📋 Layout Management: ID={shelf_id}, Mode={update_mode}")
+        print(f"📋 Layout Management: ID={shelf_id} (from global), Mode={update_mode}")
+        print(f"🔍 DEBUG: Original request shelf_id = {layout_request.shelf_id}, Using global = {shelf_id}")
         
         if update_mode == "0":
             # Read mode - ดึงข้อมูลจาก Gateway
@@ -1320,7 +1447,6 @@ async def get_shelf_info_endpoint():
                 
                 # เก็บข้อมูลใน global variable
                 GLOBAL_SHELF_INFO["shelf_id"] = data.get("shelf_id")
-                GLOBAL_SHELF_INFO["shelf_name"] = data.get("shelf_name")
                 GLOBAL_SHELF_INFO["local_ip"] = local_ip
                 
                 print(f"💾 Stored global shelf info: {GLOBAL_SHELF_INFO}")
@@ -1328,7 +1454,6 @@ async def get_shelf_info_endpoint():
                 return {
                     "success": True,
                     "shelf_id": data.get("shelf_id"),
-                    "shelf_name": data.get("shelf_name"),
                     "local_ip": local_ip
                 }
             else:
@@ -1338,7 +1463,6 @@ async def get_shelf_info_endpoint():
                     "success": False,
                     "error": f"Gateway returned {response.status_code}",
                     "shelf_id": "UNKNOWN",
-                    "shelf_name": "Shelf",
                     "local_ip": local_ip
                 }
                 
@@ -1347,8 +1471,7 @@ async def get_shelf_info_endpoint():
         return {
             "success": False,
             "error": str(e),
-            "shelf_id": "ERROR",  
-            "shelf_name": "Shelf",
+            "shelf_id": "ERROR",
             "local_ip": "unknown"
         }
 
@@ -1467,7 +1590,7 @@ async def manage_shelf_state(shelf_state_request: ShelfState):
     ใช้เชื่อมต่อกับ Gateway API รูปแบบใหม่
     
     Example Values:
-    - shelf_id: "PC2"
+    - shelf_id: รหัสชั้นวางจาก Gateway (เช่น "SHELF001", "PC2", "RACK_A")
     - update_flg: "0" (read) or "1" (write)
     - shelf_state: Array of BlockState objects with lots data
     """

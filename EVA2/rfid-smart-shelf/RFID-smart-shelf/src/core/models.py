@@ -139,3 +139,8 @@ class LayoutResponse(BaseModel):
         }
     })
 
+class GatewayLEDcommand(BaseModel):
+    """Model สำหรับควบคุม LED ผ่าน Gateway"""
+    level: str = Field(..., example="1")
+    block: str = Field(..., example="2")
+    color: Optional[str] = Field(None, example="blue")
