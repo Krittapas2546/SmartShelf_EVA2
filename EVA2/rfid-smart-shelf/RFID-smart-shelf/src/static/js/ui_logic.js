@@ -153,6 +153,7 @@ function getCellCapacity(level, block) {
         let SHELF_CONFIG = {};
         let TOTAL_LEVELS = 0;
         let MAX_BLOCKS = 0;
+        let INACTIVE_CELLS = {}; // เก็บข้อมูลช่องที่ไม่ active
         let shelf_id = null; // เพิ่มตัวแปรสำหรับเก็บ shelf_id
 
         // Flag เพื่อป้องกันการเรียก pending jobs ซ้ำ
@@ -240,14 +241,15 @@ function getCellCapacity(level, block) {
                         const newShelfConfig = {};
                         const newCellCapacities = {};
                         
+                        // เก็บข้อมูลช่องที่ไม่ active ไว้ด้วย
+                        const inactiveCells = {};
+                        
                         for (const [positionKey, slotInfo] of Object.entries(gatewayLayout)) {
-                            if (!slotInfo.active) continue; // ข้าม slot ที่ไม่ active
-                            
                             const level = parseInt(slotInfo.level);
                             const block = parseInt(slotInfo.block);
                             const capacity = parseInt(slotInfo.capacity);
                             
-                            // อัปเดต shelf config
+                            // อัปเดต shelf config (รวมทั้ง active และ inactive)
                             if (!newShelfConfig[level]) {
                                 newShelfConfig[level] = 0;
                             }
@@ -256,11 +258,17 @@ function getCellCapacity(level, block) {
                             // อัปเดต cell capacities
                             const cellKey = `${level}-${block}`;
                             newCellCapacities[cellKey] = capacity;
+                            
+                            // เก็บสถานะ active/inactive
+                            if (!slotInfo.active) {
+                                inactiveCells[cellKey] = true;
+                            }
                         }
                         
                         // อัปเดต global variables
                         SHELF_CONFIG = newShelfConfig;
                         CELL_CAPACITIES = newCellCapacities;
+                        INACTIVE_CELLS = inactiveCells;  // เพิ่มตัวแปรเก็บ inactive cells
                         TOTAL_LEVELS = Object.keys(newShelfConfig).length;
                         MAX_BLOCKS = Math.max(...Object.values(newShelfConfig));
                         
@@ -554,22 +562,35 @@ function getCellCapacity(level, block) {
                 for (let block = 1; block <= blocksInThisLevel; block++) {
                     const cell = document.createElement('div');
                     cell.id = `cell-${level}-${block}`;
-                    cell.className = 'shelf-cell';
+                    
+                    const cellKey = `${level}-${block}`;
+                    const isInactive = INACTIVE_CELLS[cellKey];
+                    
+                    // ตั้งค่า class และ style ตามสถานะ active/inactive
+                    if (isInactive) {
+                        cell.className = 'shelf-cell inactive-cell';
+                        cell.style.backgroundColor = '#e0e0e0'; // สีเทา
+                        cell.style.border = '2px dashed #bbb'; // เส้นขอบเส้นประ
+                        cell.style.cursor = 'not-allowed'; // เปลี่ยน cursor
+                        cell.style.opacity = '0.7';
+                    } else {
+                        cell.className = 'shelf-cell';
+                        cell.style.cursor = 'pointer';
+                        
+                        // เพิ่ม click event เฉพาะ active cells
+                        cell.addEventListener('click', () => {
+                            const lots = getLotsInCell(level, block);
+                            const activeJob = getActiveJob();
+                            const targetLotNo = activeJob ? activeJob.lot_no : null;
+                            renderCellPreview({ level, block, lots, targetLotNo });
+                        });
+                    }
+                    
+                    // Style ทั่วไปสำหรับทุก cell
                     cell.style.flex = '1'; // ให้ทุก cell มีขนาดเท่ากันและเต็มพื้นที่
                     cell.style.height = '100%';
-                    cell.style.cursor = 'pointer';
                     cell.style.borderRadius = '4px';
                     cell.style.boxShadow = '0 1px 2px rgba(0,0,0,0.1)';
-                    
-                    // ไม่ใส่ minWidth หรือ maxWidth เพื่อให้ flex ทำงานเต็มที่
-                    
-                    // เพิ่ม click event สำหรับแสดง cell preview
-                    cell.addEventListener('click', () => {
-                        const lots = getLotsInCell(level, block);
-                        const activeJob = getActiveJob();
-                        const targetLotNo = activeJob ? activeJob.lot_no : null;
-                        renderCellPreview({ level, block, lots, targetLotNo });
-                    });
                     
                     levelContainer.appendChild(cell);
                 }

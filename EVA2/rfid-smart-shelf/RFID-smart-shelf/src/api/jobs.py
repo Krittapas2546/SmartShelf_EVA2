@@ -1140,7 +1140,7 @@ async def get_pending_jobs_from_gateway():
                             "level": gateway_job.get("level"),
                             "block": gateway_job.get("block"),
                             "place_flg": gateway_job.get("place_flg"),
-                            "tray_count": (gateway_job.get("tray_count") or 1) + 1,  # covertray
+                            "tray_count": int(gateway_job.get("tray_count") or 1) + 1,  # แปลงเป็น int ก่อน + covertray
                             "status": gateway_job.get("status"),
                             "biz": gateway_job.get("biz", "Unknown"),
                             "shelf_id": shelf_id,
