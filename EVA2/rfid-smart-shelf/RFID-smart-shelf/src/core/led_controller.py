@@ -95,13 +95,20 @@ def refresh_led_config():
     # Reinitialize hardware if available
     if 'pi5neo' in globals():
         try:
+            import time
             neo = pi5neo.Pi5Neo('/dev/spidev0.0', NUM_PIXELS, 800)
+            # Clear ทันทีหลัง init
+            neo.fill_strip(0, 0, 0)
+            neo.update_strip()
+            time.sleep(0.02)
             print(f"💡 Hardware LED strip reinitialized with {NUM_PIXELS} pixels")
         except Exception as e:
             print(f"⚠️ Hardware LED reinit failed: {e}")
 
 try:
     import pi5neo
+    import time
+    
     neo = pi5neo.Pi5Neo('/dev/spidev0.0', NUM_PIXELS, 800)
 
     def set_led(level, block, r, g, b):
@@ -125,10 +132,19 @@ try:
             if i >= len(_led_state):
                 return {"ok": False, "error": f"LED index {i} >= array length {len(_led_state)}"}
                 
+            # ใช้คำสั่งที่ work จากโค้ดตัวอย่าง
             _led_state[i] = (r, g, b)
-            for j, (rr, gg, bb) in enumerate(_led_state):
-                neo.set_led_color(j, rr, gg, bb)
+            
+            # Clear strip first แล้ว set สีใหม่
+            neo.fill_strip(0, 0, 0)  # Clear ก่อน
             neo.update_strip()
+            time.sleep(0.02)  # ให้เวลารีเซ็ต
+            
+            # Set LED สีที่ต้องการ
+            neo.set_led_color(i, r, g, b)
+            neo.update_strip()
+            time.sleep(0.02)  # ให้เวลา update
+            
             return {"ok": True, "index": i, "position": f"L{level}B{block}"}
             
         except Exception as e:
@@ -148,6 +164,11 @@ try:
             processed = 0
             errors = []
             
+            # Clear strip ก่อน
+            neo.fill_strip(0, 0, 0)
+            neo.update_strip()
+            time.sleep(0.02)
+            
             for led in leds:
                 level = int(led.get('level', 0))
                 block = int(led.get('block', 0))
@@ -165,12 +186,12 @@ try:
                     continue
                     
                 _led_state[i] = (r, g, b)
+                neo.set_led_color(i, r, g, b)  # Set แต่ละ LED ทันที
                 processed += 1
             
-            # Update hardware
-            for j, (rr, gg, bb) in enumerate(_led_state):
-                neo.set_led_color(j, rr, gg, bb)
+            # Update hardware ครั้งเดียว
             neo.update_strip()
+            time.sleep(0.02)
             
             result = {"ok": True, "count": processed, "total_requested": len(leds)}
             if errors:
@@ -263,8 +284,10 @@ def clear_all_leds():
     _led_state = [(0, 0, 0)] * current_pixels
     
     if 'neo' in globals() and neo:
-        neo.clear_strip()
+        # ใช้คำสั่งที่ work จากโค้ดตัวอย่าง
+        neo.fill_strip(0, 0, 0)
         neo.update_strip()
+        time.sleep(0.02)  # ให้เวลารีเซ็ต
         print(f"💡 Hardware LEDs cleared ({current_pixels} pixels)")
     else:
         print(f"[MOCK] Would clear all LEDs ({current_pixels} pixels)")
