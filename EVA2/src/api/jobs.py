@@ -85,14 +85,27 @@ def init_button_reader():
             }
         }
         
-        # Broadcast to WebSocket clients (asyncio.create_task for async broadcast)
+        # Broadcast to WebSocket clients (using threading to avoid event loop issues)
+        import threading
         import asyncio
-        try:
-            # Schedule async broadcast in event loop
-            asyncio.create_task(manager.broadcast(json.dumps(button_event)))
-            print(f"📡 Button press broadcasted: {position}")
-        except Exception as e:
-            print(f"⚠️ WebSocket broadcast failed: {e}")
+        
+        def async_broadcast():
+            try:
+                # Create new event loop for this thread
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                # Run the broadcast
+                loop.run_until_complete(manager.broadcast(json.dumps(button_event)))
+                loop.close()
+                
+                print(f"📡 Button press broadcasted: {position}")
+            except Exception as e:
+                print(f"⚠️ WebSocket broadcast failed: {e}")
+        
+        # Run in separate thread to avoid blocking
+        thread = threading.Thread(target=async_broadcast, daemon=True)
+        thread.start()
     
     try:
         # Create button reader instance

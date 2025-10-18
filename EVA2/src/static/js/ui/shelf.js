@@ -1,7 +1,4 @@
-/**
- * ui/shelf.js - Shelf Grid Rendering & Cell Management
- * จัดการการแสดงผล shelf grid และการจัดการ cell
- */
+
 
 /**
  * สร้างโครงสร้าง shelf grid

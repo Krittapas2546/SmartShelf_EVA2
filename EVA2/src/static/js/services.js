@@ -332,11 +332,9 @@ async function initializeShelfName() {
                 ShelfState.setShelfId(data.shelf_id);
                 console.log(`✅ Shelf ID set to: ${data.shelf_id}`);
                 
-                // อัปเดต title ถ้ามีข้อมูล shelf_name
-                if (data.shelf_name) {
-                    document.title = `Smart Shelf - ${data.shelf_name}`;
-                    console.log(`🏷️ Page title updated to: ${document.title}`);
-                }
+                // อัปเดต title ด้วย shelf_id
+                document.title = `Smart Shelf - ${data.shelf_id}`;
+                console.log(`🏷️ Page title updated to: ${document.title}`);
                 
                 return true;
             } else {

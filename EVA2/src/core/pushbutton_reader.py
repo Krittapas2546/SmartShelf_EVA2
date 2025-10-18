@@ -39,9 +39,9 @@ except ImportError:
 # Hardware Configuration
 I2C_ADDR = 0x20          # MCP23008 I2C address
 BUTTON_PINS = [0, 1, 2]  # GPIO pins P0, P1, P2
-DEBOUNCE_TIME = 0.05     # 50ms debounce
+DEBOUNCE_TIME = 0.2      # 200ms debounce (เพิ่มขึ้นเพื่อป้องกัน bounce)
 I2C_BUS = 1              # I2C bus number
-POLL_INTERVAL = 0.02     # 20ms polling interval
+POLL_INTERVAL = 0.05     # 50ms polling interval (ลดความถี่)
 
 @dataclass
 class ButtonState:
@@ -166,24 +166,34 @@ class PushButtonReader:
                     current_pressed = current_states.get(button_index, False)
                     button_state = self.button_states[button_index]
                     
-                    # Debounce logic
-                    if current_pressed != button_state.pressed:
-                        # State change detected
-                        if current_time - button_state.last_press_time > DEBOUNCE_TIME:
-                            # Update state after debounce period
-                            button_state.pressed = current_pressed
+                    # Debounce logic with improved edge detection
+                    if current_pressed and not button_state.pressed:
+                        # Button press detected
+                        time_since_last = current_time - button_state.last_press_time
+                        
+                        if time_since_last > DEBOUNCE_TIME:
+                            button_state.pressed = True
                             button_state.last_press_time = current_time
                             
-                            # Trigger callback on press (not release)
-                            if current_pressed and self.callback:
-                                position = self.position_mapping.get(button_index, f"L1B{button_index+1}")
-                                
-                                self._log(f"🔘 Button {button_index} pressed -> {position}")
-                                
+                            # Get position mapping
+                            position = self.position_mapping.get(button_index, f"L1B{button_index+1}")
+                            
+                            self._log(f"🔘 Button {button_index} pressed -> {position}")
+                            
+                            # Trigger callback
+                            if self.callback:
                                 try:
                                     self.callback(button_index, position)
                                 except Exception as callback_error:
                                     self._log(f"⚠️ Callback error: {callback_error}")
+                        else:
+                            # Too soon after last press - ignore (debounce)
+                            self._log(f"🔇 Button {button_index} debounced (time_since_last: {time_since_last:.3f}s)")
+                    
+                    elif not current_pressed and button_state.pressed:
+                        # Button release detected
+                        button_state.pressed = False
+                        self._log(f"🔘 Button {button_index} released")
                 
                 # Sleep until next poll
                 time.sleep(POLL_INTERVAL)
@@ -255,6 +265,30 @@ class PushButtonReader:
             except Exception as callback_error:
                 self._log(f"⚠️ Simulation callback error: {callback_error}")
     
+    def debug_gpio_state(self):
+        """Debug function to check raw GPIO state"""
+        if not self.hardware_available:
+            self._log("⚠️ Hardware not available for debugging")
+            return None
+        
+        try:
+            # Read GPIO register
+            gpio_state = self.bus.read_byte_data(I2C_ADDR, 0x09)  # GPIO register
+            
+            self._log(f"🔍 Raw GPIO state: 0x{gpio_state:02X} (binary: {gpio_state:08b})")
+            
+            # Show individual pin states
+            for pin in BUTTON_PINS:
+                pin_state = bool(gpio_state & (1 << pin))
+                button_pressed = not pin_state  # Inverted logic
+                self._log(f"  Pin {pin}: {'HIGH' if pin_state else 'LOW'} -> Button {'PRESSED' if button_pressed else 'RELEASED'}")
+            
+            return gpio_state
+            
+        except Exception as e:
+            self._log(f"⚠️ GPIO debug error: {e}")
+            return None
+    
     def __del__(self):
         """Cleanup on destruction"""
         self.stop_monitoring()
@@ -290,8 +324,25 @@ if __name__ == "__main__":
     # Keep running for manual testing
     try:
         print("✨ Press buttons or Ctrl+C to exit...")
+        print("🔍 Debug: Press 'd' + Enter to see GPIO state")
+        
+        import sys
+        import select
+        
         while True:
-            time.sleep(1)
+            # Check for keyboard input (works on Linux/Pi)
+            if hasattr(select, 'select'):
+                ready, _, _ = select.select([sys.stdin], [], [], 1)
+                if ready:
+                    user_input = sys.stdin.readline().strip().lower()
+                    if user_input == 'd':
+                        reader.debug_gpio_state()
+                    elif user_input == 'q':
+                        break
+            else:
+                # Windows fallback
+                time.sleep(1)
+                
     except KeyboardInterrupt:
         print("\n👋 Stopping...")
         reader.stop_monitoring()
