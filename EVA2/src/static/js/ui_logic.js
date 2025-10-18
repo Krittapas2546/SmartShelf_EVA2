@@ -1668,7 +1668,62 @@ function getCellCapacity(level, block) {
                 return;
             }
 
-            // ตรวจสอบว่าเป็นการสแกน lot number ใหม่ที่อยู่ใน queue หรือไม่
+            // ลองตรวจสอบก่อนว่าเป็น position barcode หรือไม่ (L1B1, 1-1, etc.)
+            const locationMatch = parseLocationFromBarcode(scannedData);
+            
+            if (locationMatch) {
+                // เป็น position barcode - ดำเนินการต่อ
+                const { level, block } = locationMatch;
+                const correctLevel = Number(activeJob.level);
+                const correctBlock = Number(activeJob.block);
+
+                // ก่อนอัปเดต UI ให้ลบ class error เดิมออกจากทุก cell
+                const allCells = document.querySelectorAll('.shelf-cell');
+                allCells.forEach(cell => {
+                    cell.classList.remove('wrong-location');
+                    // ไม่ลบ selected-task ที่ cell เป้าหมาย
+                    const cellId = cell.id;
+                    if (cellId !== `cell-${correctLevel}-${correctBlock}`) {
+                        cell.classList.remove('selected-task');
+                    }
+                });
+
+                if (level === correctLevel && block === correctBlock) {
+                    // ตำแหน่งถูกต้อง - complete job
+                    console.log(`✅ Correct position scanned: L${level}B${block}`);
+                    completeCurrentJob();
+                } else {
+                    // ตำแหน่งผิด - แสดง error
+                    console.log(`❌ Wrong position scanned! Expected: L${correctLevel}B${correctBlock}, Got: L${level}B${block}`);
+                    
+                    // Highlight ช่องที่ถูกต้อง
+                    const correctCell = document.getElementById(`cell-${correctLevel}-${correctBlock}`);
+                    if (correctCell) {
+                        correctCell.classList.add('selected-task');
+                    }
+                    
+                    // Highlight ช่องที่สแกนผิด
+                    const wrongCell = document.getElementById(`cell-${level}-${block}`);
+                    if (wrongCell) {
+                        wrongCell.classList.add('wrong-location');
+                        wrongCell.classList.remove('selected-task');
+                    }
+                    
+                    showNotification(
+                        `❌ Wrong location! Expected: L${correctLevel}B${correctBlock}, Scanned: L${level}B${block}`,
+                        'error'
+                    );
+                    
+                    reportJobError('WRONG_LOCATION', `Scanned wrong position: L${level}B${block}, Expected: L${correctLevel}B${correctBlock}`);
+                    
+                    // อัปเดต LED ให้แสดง error state
+                    controlLEDByActiveJob({ level, block });
+                }
+                
+                return; // จบการทำงานสำหรับ position barcode
+            }
+
+            // ถ้าไม่ใช่ position barcode ให้ตรวจสอบว่าเป็น lot number หรือไม่
             if (isValidLotNumberFormat(scannedData)) {
                 const queue = getQueue();
                 const queueJob = queue.find(job => job.lot_no === scannedData);
@@ -1686,57 +1741,8 @@ function getCellCapacity(level, block) {
                 }
             }
 
-            const locationMatch = parseLocationFromBarcode(scannedData);
-            
-            if (!locationMatch) {
-                showNotification(`❌ Invalid barcode format: ${scannedData}`, 'error');
-                return;
-            }
-
-            const { level, block } = locationMatch;
-            const correctLevel = Number(activeJob.level);
-            const correctBlock = Number(activeJob.block);
-
-            // ก่อนอัปเดต UI ให้ลบ class error เดิมออกจากทุก cell
-            const allCells = document.querySelectorAll('.shelf-cell');
-            allCells.forEach(cell => {
-                cell.classList.remove('wrong-location');
-                // ไม่ลบ selected-task ที่ cell เป้าหมาย
-                const cellId = cell.id;
-                if (cellId !== `cell-${correctLevel}-${correctBlock}`) {
-                    cell.classList.remove('selected-task');
-                }
-            });
-
-            if (Number(level) === correctLevel && Number(block) === correctBlock) {
-                if (activeJob.error) {
-                    const cleanJob = { ...activeJob };
-                    delete cleanJob.error;
-                    delete cleanJob.errorType;
-                    delete cleanJob.errorMessage;
-                    setActiveJob(cleanJob);
-                    renderAll();
-                }
-                showNotification(`✅ Correct location! Completing job for Lot ${activeJob.lot_no}...`, 'success');
-                completeCurrentJob();
-            } else {
-                // แสดง error UI ให้เหมือน LED: ช่องถูกต้อง (selected-task, ฟ้า), ช่องที่ผิด (wrong-location, แดง)
-                //showNotification(`❌ Wrong location! Expected: L${correctLevel}-B${correctBlock}, Got: L${level}-B${block}`, 'error');
-
-                // อัปเดต UI: ช่องถูกต้อง (selected-task)
-                const correctCell = document.getElementById(`cell-${correctLevel}-${correctBlock}`);
-                if (correctCell) {
-                    correctCell.classList.add('selected-task');
-                }
-                // ช่องผิด (wrong-location)
-                const wrongCell = document.getElementById(`cell-${level}-${block}`);
-                if (wrongCell) {
-                    wrongCell.classList.add('wrong-location');
-                    wrongCell.classList.remove('selected-task');
-                }
-                // อัปเดต state error ใน activeJob
-                reportJobError('WRONG_LOCATION', `Scanned wrong location: L${level}-B${block}, Expected: L${correctLevel}-B${correctBlock}`);
-            }
+            // ถ้าไม่ใช่ทั้ง position และ lot number ที่ถูกต้อง
+            showNotification(`❌ Invalid barcode: ${scannedData}`, 'error');
         }
 
         /**
@@ -1987,9 +1993,19 @@ function getCellCapacity(level, block) {
          * @param {Object} buttonData - ข้อมูลปุ่มจาก WebSocket
          */
         function handleButtonPress(buttonData) {
-            const { button_index, position, level, block, timestamp, source } = buttonData;
+            const { button_index, position, timestamp, source } = buttonData;
             
-            console.log(`🔘 Processing button press: Button ${button_index} -> ${position} (L${level}B${block})`);
+            // Parse position string (e.g., "L1B1" -> level=1, block=1)
+            const posMatch = position.match(/L(\d+)B(\d+)/);
+            if (!posMatch) {
+                console.log(`⚠️ Invalid position format: ${position}`);
+                return;
+            }
+            
+            const actualLevel = Number(posMatch[1]);
+            const actualBlock = Number(posMatch[2]);
+            
+            console.log(`🔘 Processing button press: Button ${button_index} -> ${position} (L${actualLevel}B${actualBlock})`);
             
             // ตรวจสอบว่ามี active job หรือไม่
             const activeJob = getActiveJob();
@@ -2001,8 +2017,6 @@ function getCellCapacity(level, block) {
             
             const expectedLevel = Number(activeJob.level);
             const expectedBlock = Number(activeJob.block);
-            const actualLevel = Number(level);
-            const actualBlock = Number(block);
             
             console.log(`🎯 Button validation: Expected L${expectedLevel}B${expectedBlock}, Got L${actualLevel}B${actualBlock}`);
             
