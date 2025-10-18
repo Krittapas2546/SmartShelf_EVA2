@@ -224,7 +224,7 @@ function getCellCapacity(level, block) {
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        shelf_id: shelf_id || "PC2", // ใช้ shelf_id ที่มีหรือค่าเริ่มต้น
+                        shelf_id: shelf_id , // ใช้ shelf_id ที่ได้จากการ initialize
                         update_flg: "0", // อ่านข้อมูล
                         slots: {}
                     })
@@ -2142,15 +2142,16 @@ function getCellCapacity(level, block) {
             console.log('📄 DOM Content Loaded - เริ่มต้นระบบ');
             
             try {
+            
+                await initializeShelfName(); // เพิ่มการดึงข้อมูล shelf name
+                console.log('✅ Shelf name initialized');
                 console.log('⏳ Loading shelf config...');
                 await loadShelfConfig();
                 console.log('✅ Shelf config loaded');
-                
-                console.log('⏳ Initializing shelf name...');
-                await initializeShelfName(); // เพิ่มการดึงข้อมูล shelf name
-                console.log('✅ Shelf name initialized');
-                
-                // 🔄 เพิ่มการดึงงานที่ค้างอยู่จาก Gateway หลังจากได้ shelf_id แล้ว
+                await loadLayoutFromGateway();
+                console.log('✅ Shelf layout loaded from Gateway');
+
+
                 console.log('🔄 เริ่มดึงงานที่ค้างอยู่จาก Gateway...');
                 try {
                     const pendingResult = await loadPendingJobsFromGateway();

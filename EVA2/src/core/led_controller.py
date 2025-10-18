@@ -51,7 +51,10 @@ def idx(level, block):
         # 🔍 Debug: เฝ้าระวัง L1B1 โดยเฉพาะ
         if level == 1 and block == 1:
             print(f"🚨 CRITICAL: L1B1 maps to LED index {calculated_idx} (should be 0 normally)")
-        
+        elif level == 1 and block == 2:
+            print(f"🔍 DEBUG: L1B2 maps to LED index {calculated_idx}")
+        elif level == 1 and block == 3:
+            print(f"🔍 DEBUG: L1B3 maps to LED index {calculated_idx}")
         # ตรวจสอบ bounds
         if calculated_idx < 0 or calculated_idx >= total_pixels:
             print(f"❌ LED index {calculated_idx} out of bounds (0-{total_pixels-1})")

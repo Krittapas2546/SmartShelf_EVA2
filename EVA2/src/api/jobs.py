@@ -2169,3 +2169,51 @@ def stop_button_monitoring():
                 "message": str(e)
             }
         )
+@router.post("/api/debug/led_test", tags=["Debug"])
+async def debug_led_mapping():
+    """
+    Debug LED mapping to identify hardware issues
+    """
+    try:
+        from core.led_controller import idx, clear_all_leds, set_led
+        import time
+        
+        results = []
+        
+        # Clear first
+        clear_all_leds()
+        results.append("🧹 LEDs cleared")
+        
+        # Test problematic positions
+        test_positions = [
+            (1, 1, "L1B1 - currently showing green"),
+            (1, 2, "L1B2 - sent to index 1 in logs"), 
+            (1, 3, "L1B3 - currently showing green")
+        ]
+        
+        for level, block, description in test_positions:
+            led_index = idx(level, block)
+            results.append(f"📍 {description}")
+            results.append(f"   Maps to LED index: {led_index}")
+            
+            # Set to bright red for easy identification
+            result = set_led(level, block, 255, 0, 0)
+            results.append(f"   Set result: {result}")
+            
+            time.sleep(0.1)  # Brief delay
+        
+        return {
+            "ok": True,
+            "test": "LED mapping debug",
+            "results": results,
+            "instruction": "Check hardware: L1B1, L1B2, L1B3 should now be RED. Note which ones actually light up."
+        }
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "LED debug test failed",
+                "detail": str(e)
+            }
+        )
