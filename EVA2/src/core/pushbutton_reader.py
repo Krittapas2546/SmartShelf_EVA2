@@ -3,13 +3,14 @@
 Push Button Reader for Smart Shelf System
 =========================================
 
-Simple button reader class using PCF8574/MCP23008 I2C GPIO expander
+Simple button reader class using PCF8574 I2C GPIO expander
 with debounce and callback support. Integrates directly with main server.
 
 Hardware Setup:
-- I2C Address: 0x20 (MCP23008) or 0x21 (PCF8574)
+- I2C Address: 0x20 (PCF8574)
 - Pins: P0, P1, P2 (3 buttons)
-- Pull-up resistors enabled (buttons connect to GND when pressed)
+- PCF8574 quasi-bidirectional I/O with weak pull-up
+- Buttons connect to GND when pressed (active LOW)
 
 Usage:
     from core.pushbutton_reader import PushButtonReader
@@ -25,7 +26,6 @@ Usage:
 
 import time
 import threading
-import logging
 from typing import Callable, Dict, Optional
 from dataclasses import dataclass
 
@@ -36,12 +36,12 @@ except ImportError:
     HAS_SMBUS = False
     print("⚠️ smbus2 not available - button reader will run in simulation mode")
 
-# Hardware Configuration
-I2C_ADDR = 0x20          # MCP23008 I2C address
+# Hardware Configuration (PCF8574 only)
+I2C_ADDR = 0x20          # PCF8574 I2C address
 BUTTON_PINS = [0, 1, 2]  # GPIO pins P0, P1, P2
-DEBOUNCE_TIME = 0.2      # 200ms debounce (เพิ่มขึ้นเพื่อป้องกัน bounce)
+DEBOUNCE_TIME = 0.2      # 200ms debounce
 I2C_BUS = 1              # I2C bus number
-POLL_INTERVAL = 0.05     # 50ms polling interval (ลดความถี่)
+POLL_INTERVAL = 0.05     # 50ms polling interval
 
 @dataclass
 class ButtonState:
@@ -52,7 +52,12 @@ class ButtonState:
 
 class PushButtonReader:
     """
-    Simple push button reader with debounce and position mapping
+    Push button reader for PCF8574 (quasi-bidirectional I/O)
+    
+    How it works:
+    - Write 0xFF once during init = set all pins as input with weak pull-up
+    - Read 1 byte from port: 1=HIGH(released), 0=LOW(pressed)
+    - Software inverts: pressed=True for easier handling
     """
     
     def __init__(self, callback: Optional[Callable[[int, str], None]] = None, debug: bool = False):
@@ -73,9 +78,9 @@ class PushButtonReader:
         
         # Position mapping (L1B1, L1B2, L1B3 by default)
         self.position_mapping = {
-            0: "L1B1",  # Button 0 -> Level 1 Block 1
-            1: "L1B2",  # Button 1 -> Level 1 Block 2  
-            2: "L1B3",  # Button 2 -> Level 1 Block 3
+            BUTTON_PINS[0]: "L1B1",
+            BUTTON_PINS[1]: "L1B2",
+            BUTTON_PINS[2]: "L1B3",
         }
         
         # I2C setup
@@ -85,13 +90,11 @@ class PushButtonReader:
         if HAS_SMBUS:
             try:
                 self.bus = SMBus(I2C_BUS)
-                # Test I2C connection
-                self.bus.read_byte(I2C_ADDR)
+                # Test I2C connection and init PCF8574
+                self.bus.read_byte(I2C_ADDR)  # Probe device
+                self._init_pcf8574()
                 self.hardware_available = True
-                self._log("✅ I2C hardware detected")
-                
-                # Initialize MCP23008 (if needed)
-                self._init_mcp23008()
+                self._log("✅ I2C hardware detected (PCF8574)")
                 
             except Exception as e:
                 self._log(f"⚠️ I2C hardware not available: {e}")
@@ -99,21 +102,25 @@ class PushButtonReader:
         else:
             self._log("⚠️ Running in simulation mode (smbus2 not installed)")
     
-    def _log(self, message: str):
+    def _log(self, msg: str):
         """Debug logging"""
         if self.debug:
-            print(f"[ButtonReader] {message}")
+            print(f"[ButtonReader] {msg}")
     
-    def _init_mcp23008(self):
-        """Initialize MCP23008 GPIO expander"""
+    def _init_pcf8574(self):
+        """
+        Initialize PCF8574 GPIO expander
+        
+        PCF8574 uses quasi-bidirectional I/O:
+        - Write 0xFF = all pins as input with weak pull-up
+        - Buttons pull pins LOW when pressed
+        """
         try:
-            # Set GPIO direction (0xFF = all inputs)
-            self.bus.write_byte_data(I2C_ADDR, 0x00, 0xFF)  # IODIR
-            # Enable pull-ups (0xFF = all enabled)  
-            self.bus.write_byte_data(I2C_ADDR, 0x06, 0xFF)  # GPPU
-            self._log("🔧 MCP23008 initialized")
+            # Write all 1s to enable input mode with pull-up
+            self.bus.write_byte(I2C_ADDR, 0xFF)
+            self._log("🔧 PCF8574 initialized (all pins as input w/ pull-up)")
         except Exception as e:
-            self._log(f"⚠️ MCP23008 init failed: {e}")
+            self._log(f"⚠️ PCF8574 init failed: {e}")
     
     def update_position_mapping(self, button_mapping: Dict[int, str]):
         """
@@ -127,23 +134,31 @@ class PushButtonReader:
     
     def read_buttons(self) -> Dict[int, bool]:
         """
-        Read current button states
+        Read current button states from PCF8574
         
         Returns:
             Dict mapping button_index to pressed state (True = pressed)
+            
+        PCF8574 logic:
+        - Read entire 8-bit port
+        - 1 = HIGH (button released)
+        - 0 = LOW (button pressed)
+        - Invert bits so pressed = True for easier handling
         """
         if not self.hardware_available:
             # Simulation mode - no buttons pressed
             return {i: False for i in BUTTON_PINS}
         
         try:
-            # Read GPIO register
-            gpio_state = self.bus.read_byte_data(I2C_ADDR, 0x09)  # GPIO register
+            # Read entire port (8 bits)
+            port_val = self.bus.read_byte(I2C_ADDR)
             
-            # Extract button states (inverted logic - 0 = pressed)
+            # Extract and invert button states
+            # pressed = True when pin is LOW (0)
             button_states = {}
             for pin in BUTTON_PINS:
-                button_states[pin] = not bool(gpio_state & (1 << pin))
+                pin_high = bool((port_val >> pin) & 0x01)
+                button_states[pin] = not pin_high  # Invert: LOW = pressed
             
             return button_states
             
@@ -159,41 +174,41 @@ class PushButtonReader:
             try:
                 # Read current button states
                 current_states = self.read_buttons()
-                current_time = time.time()
+                now = time.time()
                 
                 # Process each button
-                for button_index in BUTTON_PINS:
-                    current_pressed = current_states.get(button_index, False)
-                    button_state = self.button_states[button_index]
+                for pin in BUTTON_PINS:
+                    cur = current_states.get(pin, False)
+                    st = self.button_states[pin]
                     
-                    # Debounce logic with improved edge detection
-                    if current_pressed and not button_state.pressed:
+                    # Detect button press (rising edge)
+                    if cur and not st.pressed:
                         # Button press detected
-                        time_since_last = current_time - button_state.last_press_time
+                        time_since_last = now - st.last_press_time
                         
                         if time_since_last > DEBOUNCE_TIME:
-                            button_state.pressed = True
-                            button_state.last_press_time = current_time
+                            st.pressed = True
+                            st.last_press_time = now
                             
                             # Get position mapping
-                            position = self.position_mapping.get(button_index, f"L1B{button_index+1}")
+                            pos = self.position_mapping.get(pin, f"L1B{pin+1}")
                             
-                            self._log(f"🔘 Button {button_index} pressed -> {position}")
+                            self._log(f"🔘 Button {pin} pressed -> {pos}")
                             
                             # Trigger callback
                             if self.callback:
                                 try:
-                                    self.callback(button_index, position)
-                                except Exception as callback_error:
-                                    self._log(f"⚠️ Callback error: {callback_error}")
+                                    self.callback(pin, pos)
+                                except Exception as cb_err:
+                                    self._log(f"⚠️ Callback error: {cb_err}")
                         else:
                             # Too soon after last press - ignore (debounce)
-                            self._log(f"🔇 Button {button_index} debounced (time_since_last: {time_since_last:.3f}s)")
+                            self._log(f"🔇 Button {pin} debounced ({time_since_last:.3f}s)")
                     
-                    elif not current_pressed and button_state.pressed:
-                        # Button release detected
-                        button_state.pressed = False
-                        self._log(f"🔘 Button {button_index} released")
+                    # Detect button release (falling edge)
+                    elif not cur and st.pressed:
+                        st.pressed = False
+                        self._log(f"🔘 Button {pin} released")
                 
                 # Sleep until next poll
                 time.sleep(POLL_INTERVAL)
@@ -266,24 +281,24 @@ class PushButtonReader:
                 self._log(f"⚠️ Simulation callback error: {callback_error}")
     
     def debug_gpio_state(self):
-        """Debug function to check raw GPIO state"""
+        """Debug function to check raw GPIO state of PCF8574"""
         if not self.hardware_available:
             self._log("⚠️ Hardware not available for debugging")
             return None
         
         try:
-            # Read GPIO register
-            gpio_state = self.bus.read_byte_data(I2C_ADDR, 0x09)  # GPIO register
+            # Read entire port (8 bits)
+            port_val = self.bus.read_byte(I2C_ADDR)
             
-            self._log(f"🔍 Raw GPIO state: 0x{gpio_state:02X} (binary: {gpio_state:08b})")
+            self._log(f"🔍 Raw PORT (PCF8574): 0x{port_val:02X} ({port_val:08b})")
             
             # Show individual pin states
             for pin in BUTTON_PINS:
-                pin_state = bool(gpio_state & (1 << pin))
-                button_pressed = not pin_state  # Inverted logic
-                self._log(f"  Pin {pin}: {'HIGH' if pin_state else 'LOW'} -> Button {'PRESSED' if button_pressed else 'RELEASED'}")
+                pin_high = bool((port_val >> pin) & 0x01)
+                button_pressed = not pin_high  # Inverted logic
+                self._log(f"  P{pin}: {'HIGH' if pin_high else 'LOW'} -> Button {'PRESSED' if button_pressed else 'RELEASED'}")
             
-            return gpio_state
+            return port_val
             
         except Exception as e:
             self._log(f"⚠️ GPIO debug error: {e}")
