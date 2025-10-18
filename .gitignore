@@ -1,0 +1,5 @@
+EVA2/envpi/
+**/__pycache__/
+*.pyc
+.env
+.vscode/
