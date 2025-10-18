@@ -639,6 +639,24 @@ function getCellCapacity(level, block) {
                 }
             }
             
+            // 🔥 Clear all LEDs when backing out from Active Job
+            console.log('💡 Clearing LEDs when leaving Active Job view');
+            fetch('/api/led/clear', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.ok) {
+                    console.log('✅ LEDs cleared successfully');
+                } else {
+                    console.warn('⚠️ LED clear failed:', data);
+                }
+            })
+            .catch(error => {
+                console.error('❌ Error clearing LEDs:', error);
+            });
+            
             // Clear persistent notifications when leaving Active Job view
             clearPersistentNotifications();
             
@@ -1938,6 +1956,128 @@ function getCellCapacity(level, block) {
         }
         // 🔼 END OF BARCODE SCANNING FUNCTIONALITY 🔼
 
+        // 🔽 PUSH BUTTON FUNCTIONALITY 🔽
+        
+        /**
+         * หาตำแหน่งจาก button mapping (เหมือนกับ LED mapping)
+         * @param {number} buttonIndex - Index ของปุ่ม (0, 1, 2)
+         * @returns {Object|null} - {level, block} หรือ null ถ้าไม่พบ
+         */
+        function getButtonPosition(buttonIndex) {
+            // สร้าง button mapping เหมือนกับ LED mapping
+            const buttonMap = {};
+            let index = 0;
+            
+            // ใช้ SHELF_CONFIG สร้าง mapping
+            for (let level = 1; level <= TOTAL_LEVELS; level++) {
+                const maxBlocks = SHELF_CONFIG[level] || 0;
+                for (let block = 1; block <= Math.min(maxBlocks, 3); block++) { // จำกัด 3 ปุ่ม
+                    if (index < 3) {
+                        buttonMap[index] = { level, block };
+                        index++;
+                    }
+                }
+            }
+            
+            return buttonMap[buttonIndex] || null;
+        }
+        
+        /**
+         * จัดการเมื่อมีการกดปุ่ม Hardware
+         * @param {Object} buttonData - ข้อมูลปุ่มจาก WebSocket
+         */
+        function handleButtonPress(buttonData) {
+            const { button_index, position, level, block, timestamp, source } = buttonData;
+            
+            console.log(`🔘 Processing button press: Button ${button_index} -> ${position} (L${level}B${block})`);
+            
+            // ตรวจสอบว่ามี active job หรือไม่
+            const activeJob = getActiveJob();
+            if (!activeJob) {
+                console.log('⚠️ No active job - button press ignored');
+                showNotification(`🔘 Button ${button_index} pressed (${position}) - No active job`, 'info');
+                return;
+            }
+            
+            const expectedLevel = Number(activeJob.level);
+            const expectedBlock = Number(activeJob.block);
+            const actualLevel = Number(level);
+            const actualBlock = Number(block);
+            
+            console.log(`🎯 Button validation: Expected L${expectedLevel}B${expectedBlock}, Got L${actualLevel}B${actualBlock}`);
+            
+            // ตรวจสอบว่ากดปุ่มที่ตำแหน่งถูกต้องหรือไม่
+            if (actualLevel === expectedLevel && actualBlock === expectedBlock) {
+                // ✅ กดปุ่มถูกตำแหน่ง - Complete job
+                console.log(`✅ Correct button press! Completing job for Lot ${activeJob.lot_no}`);
+                showNotification(`🔘✅ Correct button! Completing job for Lot ${activeJob.lot_no}...`, 'success');
+                completeCurrentJob();
+            } else {
+                // ❌ กดปุ่มผิดตำแหน่ง - แสดง error เหมือน barcode scan ผิด
+                console.log(`❌ Wrong button press! Expected L${expectedLevel}B${expectedBlock}, Got L${actualLevel}B${actualBlock}`);
+                
+                // อัปเดต UI: ช่องถูกต้อง (selected-task), ช่องผิด (wrong-location)
+                const correctCell = document.getElementById(`cell-${expectedLevel}-${expectedBlock}`);
+                if (correctCell) {
+                    correctCell.classList.add('selected-task');
+                }
+                
+                const wrongCell = document.getElementById(`cell-${actualLevel}-${actualBlock}`);
+                if (wrongCell) {
+                    wrongCell.classList.add('wrong-location');
+                    wrongCell.classList.remove('selected-task');
+                }
+                
+                // แสดง notification และ report error
+                showNotification(`🔘❌ Wrong button! Expected: L${expectedLevel}B${expectedBlock}, Got: L${actualLevel}B${actualBlock}`, 'error');
+                reportJobError('WRONG_LOCATION', `Button pressed at wrong location: L${actualLevel}B${actualBlock}, Expected: L${expectedLevel}B${expectedBlock}`);
+                
+                // อัปเดต LED ให้แสดง error state (ถ้ามี LED controller)
+                controlLEDByActiveJob({ level: actualLevel, block: actualBlock });
+            }
+        }
+        
+        /**
+         * ดึงสถานะ button system จาก server
+         */
+        async function getButtonSystemStatus() {
+            try {
+                const response = await fetch('/api/button/status');
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log('🔘 Button system status:', data);
+                    return data;
+                } else {
+                    console.warn('⚠️ Button system not available:', response.status);
+                    return null;
+                }
+            } catch (error) {
+                console.error('❌ Error getting button system status:', error);
+                return null;
+            }
+        }
+        
+        /**
+         * แสดงสถานะ button mapping ใน console (สำหรับ debug)
+         */
+        function debugButtonMapping() {
+            console.log('🔘 Current Button Mapping:');
+            for (let i = 0; i < 3; i++) {
+                const position = getButtonPosition(i);
+                if (position) {
+                    console.log(`   Button ${i} -> L${position.level}B${position.block}`);
+                } else {
+                    console.log(`   Button ${i} -> Not mapped`);
+                }
+            }
+        }
+        
+        // ทำให้ debug function เป็น global
+        window.debugButtonMapping = debugButtonMapping;
+        window.getButtonSystemStatus = getButtonSystemStatus;
+        
+        // 🔼 END OF PUSH BUTTON FUNCTIONALITY 🔼
+
         function renderAll() {
             const queue = getQueue();
             const activeJob = getActiveJob();
@@ -2230,6 +2370,10 @@ function getCellCapacity(level, block) {
                             // แสดง notification
                             showNotification(`🗑️ Job canceled for Lot ${data.payload.lot_no || 'Unknown'} by Gateway`, 'warning');
                             break;
+                        case "button_press":
+                            console.log('🔘 Button press received:', data.payload);
+                            handleButtonPress(data.payload);
+                            break;
                     }
                 } catch (e) {
                     console.error("Error parsing message from server:", e);
@@ -2312,47 +2456,51 @@ function getCellCapacity(level, block) {
             // ช่องเป้าหมาย: สีฟ้าสำหรับ target position
             let targetColor = { r: 0, g: 100, b: 255 }; // สีฟ้าชัดเจน
             if (activeJob.place_flg === '0') {
-                targetColor = { r: 255, g: 165, b: 0 }; // สีส้มสำหรับ pick
+                targetColor = { r: 0, g: 100, b: 255 }; // สีฟ้าสำหรับ pick
             }
 
             console.log(`💡 LED Control: Active job L${level}B${block}, Place=${activeJob.place_flg}`);
 
-            // ถ้าอยู่ใน error state และมี wrong location
-            if (activeJob.error && activeJob.errorType === 'WRONG_LOCATION' && activeJob.errorMessage) {
-                const match = activeJob.errorMessage.match(/L(\d+)-B(\d+)/);
-                if (match) {
-                    const wrongLevel = Number(match[1]);
-                    const wrongBlock = Number(match[2]);
+            // 🔥 Clear LEDs ก่อนเสมอ แล้วค่อยจุด LED ใหม่
+            return fetch('/api/led/clear', { method: 'POST' })
+                .then(response => response.json())
+                .then(clearResult => {
+                    console.log('💡 LEDs cleared:', clearResult);
                     
-                    console.log(`💡 LED Error Mode: Target L${level}B${block}, Wrong L${wrongLevel}B${wrongBlock}`);
+                    // ถ้าอยู่ใน error state และมี wrong location
+                    if (activeJob.error && activeJob.errorType === 'WRONG_LOCATION' && activeJob.errorMessage) {
+                        const match = activeJob.errorMessage.match(/L(\d+)-B(\d+)/);
+                        if (match) {
+                            const wrongLevel = Number(match[1]);
+                            const wrongBlock = Number(match[2]);
+                            
+                            console.log(`💡 LED Error Mode: Target L${level}B${block}, Wrong L${wrongLevel}B${wrongBlock}`);
+                            
+                            // จุด LED 2 ดวง: เป้าหมาย และ ช่องผิด
+                            const positions = [
+                                { position: `L${level}B${block}`, ...targetColor }, // ช่องเป้าหมาย (ฟ้า/ส้ม)
+                                { position: `L${wrongLevel}B${wrongBlock}`, r: 255, g: 0, b: 0 } // ช่องผิด (แดง)
+                            ];
+                            
+                            return fetch('/api/led', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ positions })
+                            });
+                        }
+                    }
                     
-                    // ใช้ unified API สำหรับการจุดไฟหลายตำแหน่ง พร้อมการลบไฟก่อน
-                    const positions = [
-                        { position: `L${level}B${block}`, ...targetColor }, // ช่องเป้าหมาย (ฟ้า/ส้ม)
-                        { position: `L${wrongLevel}B${wrongBlock}`, r: 255, g: 0, b: 0 } // ช่องผิด (แดง)
-                    ];
-                    
+                    // โหมดปกติ - จุด LED เดียว
+                    console.log(`💡 LED Normal Mode: Target L${level}B${block}`);
                     return fetch('/api/led', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ 
-                            positions, 
-                            clear_first: true 
+                            position: `L${level}B${block}`, 
+                            ...targetColor
                         })
                     });
-                }
-            }
-            
-            // โหมดปกติ - จุดไฟเฉพาะช่องเป้าหมาย พร้อมการลบไฟก่อน
-            console.log(`💡 LED Normal Mode: Target L${level}B${block}`);
-            return fetch('/api/led', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    position: `L${level}B${block}`, 
-                    ...targetColor
                 })
-            })
                 .then(response => {
                     if (!response.ok) {
                         console.error('💡 LED Control failed:', response.status);

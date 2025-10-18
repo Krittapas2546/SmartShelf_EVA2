@@ -114,7 +114,7 @@ class SlotData(BaseModel):
 
 class LayoutRequest(BaseModel):
     """Model สำหรับ request layout จาก Gateway"""
-    shelf_id: str = Field(..., example="PC2")
+    shelf_id: str = Field(...,)
     update_flg: str = Field(..., example="0")
     slots: dict = Field(..., example={})
 

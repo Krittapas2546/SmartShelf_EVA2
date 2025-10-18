@@ -6,6 +6,7 @@ import json
 import pathlib
 import httpx
 import re
+import time
 from datetime import datetime
 
 # --- สำหรับควบคุม LED ---
@@ -17,7 +18,15 @@ from core.database import (
     DB, get_job_by_id, get_lots_in_position, add_lot_to_position, remove_lot_from_position, update_lot_quantity, validate_position, get_shelf_info, SHELF_CONFIG, update_lot_biz, get_cell_capacity, update_layout_from_gateway, get_layout_info, is_layout_loaded_from_gateway, log_current_layout, get_layout_status
 )
 from core.lms_config import LMS_BASE_URL, LMS_ENDPOINT, LMS_API_KEY, LMS_TIMEOUT
-from api.websockets import manager # <-- impor        },
+from api.websockets import manager # <-- import websocket manager
+
+# === Push Button Integration ===
+try:
+    from core.pushbutton_reader import PushButtonReader
+    BUTTON_READER_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ Button reader not available: {e}")
+    BUTTON_READER_AVAILABLE = False
 
 # Gateway Configuration  
 GATEWAY_BASE_URL = "http://43.72.20.238:8000"  # Gateway server URL
@@ -27,6 +36,9 @@ GLOBAL_SHELF_INFO = {
     "shelf_id": None,
     "local_ip": None
 }
+
+# === Global Button Reader Instance ===
+button_reader = None
 
 def get_actual_local_ip():
     """ดึง local IP address ที่แท้จริง (ไม่ใช่ 127.0.0.1)"""
@@ -47,6 +59,112 @@ def get_actual_local_ip():
             return local_ip
         except:
             return "192.168.1.100"  #
+
+# === Button Reader Functions ===
+
+def init_button_reader():
+    """Initialize button reader with WebSocket integration"""
+    global button_reader
+    
+    if not BUTTON_READER_AVAILABLE:
+        print("⚠️ Button reader not available")
+        return False
+    
+    def button_callback(button_index: int, position: str):
+        """Callback function when button is pressed"""
+        print(f"🔘 Hardware button {button_index} pressed at {position}")
+        
+        # Create button press event
+        button_event = {
+            "type": "button_press",
+            "payload": {
+                "button_index": button_index,
+                "position": position,
+                "timestamp": time.time(),
+                "source": "hardware_button"
+            }
+        }
+        
+        # Broadcast to WebSocket clients (asyncio.create_task for async broadcast)
+        import asyncio
+        try:
+            # Schedule async broadcast in event loop
+            asyncio.create_task(manager.broadcast(json.dumps(button_event)))
+            print(f"📡 Button press broadcasted: {position}")
+        except Exception as e:
+            print(f"⚠️ WebSocket broadcast failed: {e}")
+    
+    try:
+        # Create button reader instance
+        button_reader = PushButtonReader(callback=button_callback, debug=True)
+        
+        # Update position mapping from current shelf config
+        update_button_mapping()
+        
+        # Start monitoring
+        button_reader.start_monitoring()
+        
+        print(f"✅ Button reader initialized and started")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Button reader initialization failed: {e}")
+        return False
+
+def update_button_mapping():
+    """Update button position mapping based on current shelf configuration"""
+    global button_reader
+    
+    if not button_reader:
+        return
+    
+    try:
+        # Create dynamic mapping based on shelf config
+        button_mapping = {}
+        button_index = 0
+        
+        # Map buttons to first 3 positions in shelf
+        for level in sorted(SHELF_CONFIG.keys()):
+            max_blocks = SHELF_CONFIG[level]
+            for block in range(1, min(max_blocks + 1, 4)):  # Limit to first 3 positions
+                if button_index < 3:  # Max 3 hardware buttons
+                    button_mapping[button_index] = f"L{level}B{block}"
+                    button_index += 1
+                    
+                    if button_index >= 3:
+                        break
+            if button_index >= 3:
+                break
+        
+        # Update button reader mapping
+        button_reader.update_position_mapping(button_mapping)
+        print(f"📍 Button mapping updated: {button_mapping}")
+        
+    except Exception as e:
+        print(f"⚠️ Button mapping update failed: {e}")
+
+def stop_button_reader():
+    """Stop button reader"""
+    global button_reader
+    
+    if button_reader:
+        button_reader.stop_monitoring()
+        print("🛑 Button reader stopped")
+
+def get_button_reader_status():
+    """Get button reader status"""
+    global button_reader
+    
+    if not button_reader:
+        return {
+            "available": False,
+            "message": "Button reader not initialized"
+        }
+    
+    return {
+        "available": True,
+        **button_reader.get_status()
+    }
 
 # === Gateway Layout Functions ===
 async def fetch_layout_from_gateway(shelf_id: str = None):
@@ -1814,3 +1932,227 @@ async def debug_position_validation(level: int, block: int):
             "error": "Debug validation failed",
             "detail": str(e)
         })
+
+# === Push Button Integration ===
+
+@router.post("/api/button/press", tags=["Hardware Integration"])
+async def handle_button_press(request: Request):
+    """
+    Handle push button press from hardware button service
+    
+    Expected payload:
+    {
+        "button_index": 0,
+        "position": "L1B1", 
+        "timestamp": 1697123456.789,
+        "source": "hardware_button"
+    }
+    """
+    try:
+        data = await request.json()
+        
+        button_index = data.get("button_index")
+        position = data.get("position", "")
+        timestamp = data.get("timestamp", time.time())
+        source = data.get("source", "unknown")
+        
+        print(f"🔘 Button press received: Index={button_index}, Position={position}, Source={source}")
+        
+        # Validate required fields
+        if button_index is None or not position:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "Missing required fields",
+                    "message": "button_index and position are required"
+                }
+            )
+        
+        # Parse position (L1B1 -> level=1, block=1)
+        import re
+        match = re.match(r'^L(\d+)B(\d+)$', position.upper())
+        if not match:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "Invalid position format",
+                    "message": f"Position '{position}' must be in format L{{level}}B{{block}}"
+                }
+            )
+        
+        level = int(match.group(1))
+        block = int(match.group(2))
+        
+        # Validate position exists in shelf config
+        if not validate_position(level, block):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "Invalid position",
+                    "message": f"Position {position} does not exist in shelf configuration"
+                }
+            )
+        
+        # Create button press event for WebSocket broadcast
+        button_event = {
+            "type": "button_press",
+            "payload": {
+                "button_index": button_index,
+                "position": position,
+                "level": level,
+                "block": block,
+                "timestamp": timestamp,
+                "source": source
+            }
+        }
+        
+        # Broadcast to WebSocket clients (UI will handle the logic)
+        await manager.broadcast(json.dumps(button_event))
+        
+        print(f"✅ Button press broadcasted: {position} (Button {button_index})")
+        
+        return {
+            "status": "success",
+            "button_index": button_index,
+            "position": position,
+            "level": level,
+            "block": block,
+            "message": f"Button press at {position} processed successfully"
+        }
+        
+    except Exception as e:
+        print(f"❌ Button press handling error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Button press processing failed",
+                "message": str(e)
+            }
+        )
+
+@router.get("/api/button/status", tags=["Hardware Integration"])
+def get_button_status():
+    """
+    Get current button system status and mapping
+    """
+    try:
+        # Get status from button reader
+        if button_reader:
+            reader_status = get_button_reader_status()
+            
+            return {
+                "status": "active" if reader_status.get("running") else "inactive",
+                "hardware_available": reader_status.get("hardware_available", False),
+                "button_reader": reader_status,
+                "shelf_config": dict(SHELF_CONFIG),
+                "message": "Button system status retrieved successfully"
+            }
+        else:
+            return {
+                "status": "not_initialized",
+                "hardware_available": False,
+                "button_reader": None,
+                "shelf_config": dict(SHELF_CONFIG),
+                "message": "Button reader not initialized"
+            }
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Failed to get button status",
+                "message": str(e)
+            }
+        )
+
+@router.post("/api/button/simulate/{button_index}", tags=["Hardware Integration"])
+async def simulate_button_press(button_index: int):
+    """
+    Simulate button press for testing (when hardware not available)
+    """
+    try:
+        if not button_reader:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "Button reader not initialized",
+                    "message": "Button system is not running"
+                }
+            )
+        
+        if button_index not in [0, 1, 2]:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "Invalid button index",
+                    "message": "Button index must be 0, 1, or 2"
+                }
+            )
+        
+        # Simulate button press
+        button_reader.simulate_button_press(button_index)
+        
+        # Get position for response
+        position = button_reader.position_mapping.get(button_index, f"L1B{button_index+1}")
+        
+        return {
+            "status": "success",
+            "button_index": button_index,
+            "position": position,
+            "message": f"Button {button_index} press simulated at {position}"
+        }
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Button simulation failed",
+                "message": str(e)
+            }
+        )
+
+@router.post("/api/button/start", tags=["Hardware Integration"])
+def start_button_monitoring():
+    """Start button monitoring"""
+    try:
+        success = init_button_reader()
+        
+        if success:
+            return {
+                "status": "success",
+                "message": "Button monitoring started successfully"
+            }
+        else:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "Button monitoring failed to start",
+                    "message": "Check hardware connection and dependencies"
+                }
+            )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Failed to start button monitoring",
+                "message": str(e)
+            }
+        )
+
+@router.post("/api/button/stop", tags=["Hardware Integration"])
+def stop_button_monitoring():
+    """Stop button monitoring"""
+    try:
+        stop_button_reader()
+        return {
+            "status": "success",
+            "message": "Button monitoring stopped"
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Failed to stop button monitoring",
+                "message": str(e)
+            }
+        )

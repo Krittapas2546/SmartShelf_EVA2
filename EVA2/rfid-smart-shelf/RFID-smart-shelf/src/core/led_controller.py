@@ -132,18 +132,13 @@ try:
             if i >= len(_led_state):
                 return {"ok": False, "error": f"LED index {i} >= array length {len(_led_state)}"}
                 
-            # ใช้คำสั่งที่ work จากโค้ดตัวอย่าง
+            # อัพเดต state
             _led_state[i] = (r, g, b)
             
-            # Clear strip first แล้ว set สีใหม่
-            neo.fill_strip(0, 0, 0)  # Clear ก่อน
-            neo.update_strip()
-            time.sleep(0.02)  # ให้เวลารีเซ็ต
-            
-            # Set LED สีที่ต้องการ
+            # Set เฉพาะ LED เดียวโดยไม่ clear ทั้งหมด
             neo.set_led_color(i, r, g, b)
             neo.update_strip()
-            time.sleep(0.02)  # ให้เวลา update
+            time.sleep(0.02)
             
             return {"ok": True, "index": i, "position": f"L{level}B{block}"}
             
