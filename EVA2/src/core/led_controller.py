@@ -48,6 +48,10 @@ def idx(level, block):
         
         print(f"🔍 Calculation: level_offset={calculated_idx-(block-1)}, block_offset={block-1}, final_idx={calculated_idx}, total={total_pixels}")
         
+        # 🔍 Debug: เฝ้าระวัง L1B1 โดยเฉพาะ
+        if level == 1 and block == 1:
+            print(f"🚨 CRITICAL: L1B1 maps to LED index {calculated_idx} (should be 0 normally)")
+        
         # ตรวจสอบ bounds
         if calculated_idx < 0 or calculated_idx >= total_pixels:
             print(f"❌ LED index {calculated_idx} out of bounds (0-{total_pixels-1})")
@@ -118,6 +122,10 @@ try:
             if i == -1:
                 return {"ok": False, "error": f"Invalid position L{level}B{block}"}
                 
+            # 🔍 Debug: ตรวจสอบสีที่ส่งมา
+            if g > 0:
+                print(f"⚠️ WARNING: Green detected! L{level}B{block} -> RGB({r},{g},{b})")
+            
             global _led_state
             current_pixels = get_num_pixels()
             
@@ -171,6 +179,10 @@ try:
                 g = int(led.get('g', 0))
                 b = int(led.get('b', 0))
                 
+                # 🔍 Debug: ตรวจสอบสีที่ส่งมา
+                if g > 0:
+                    print(f"⚠️ WARNING: Green in batch! L{level}B{block} -> RGB({r},{g},{b})")
+                
                 i = idx(level, block)
                 if i == -1:
                     errors.append(f"L{level}B{block}: Invalid position")
@@ -203,6 +215,10 @@ except ImportError:
             i = idx(level, block)
             if i == -1:
                 return {"ok": False, "error": f"Invalid position L{level}B{block}", "mock": True}
+                
+            # 🔍 Debug: ตรวจสอบสีที่ส่งมา
+            if g > 0:
+                print(f"⚠️ WARNING: Green detected! L{level}B{block} -> RGB({r},{g},{b})")
                 
             global _led_state
             current_pixels = get_num_pixels()
@@ -247,6 +263,10 @@ except ImportError:
                 r = int(led.get('r', 0))
                 g = int(led.get('g', 0))
                 b = int(led.get('b', 0))
+                
+                # 🔍 Debug: ตรวจสอบสีที่ส่งมา (Mock)
+                if g > 0:
+                    print(f"⚠️ WARNING: Green in mock batch! L{level}B{block} -> RGB({r},{g},{b})")
                 
                 i = idx(level, block)
                 if i == -1:

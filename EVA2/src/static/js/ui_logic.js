@@ -107,7 +107,7 @@ function getCellCapacity(level, block) {
             // เตรียม batch สำหรับทุก job ใน queue
             const positions = queue.map(job => ({
                 position: `L${Number(job.level)}B${Number(job.block)}`,
-                r: 0, g: 150, b: 255 // ฟ้าสว่างสำหรับ queue
+                r: 0, g: 0, b: 255 // สีฟ้าล้วนสำหรับ queue (ไม่มีเขียวผสม)
             }));
             
             fetch('/api/led', {
@@ -819,7 +819,7 @@ function getCellCapacity(level, block) {
             // เตรียมตำแหน่ง error (ถ้ามี)
             let wrongLevel = null, wrongBlock = null;
             if (activeJob && activeJob.error && activeJob.errorType === 'WRONG_LOCATION' && activeJob.errorMessage) {
-                const match = activeJob.errorMessage.match(/L(\d+)-B(\d+)/);
+                const match = activeJob.errorMessage.match(/L(\d+)B(\d+)/);
                 if (match) {
                     wrongLevel = Number(match[1]);
                     wrongBlock = Number(match[2]);
@@ -1716,8 +1716,7 @@ function getCellCapacity(level, block) {
                     
                     reportJobError('WRONG_LOCATION', `Scanned wrong position: L${level}B${block}, Expected: L${correctLevel}B${correctBlock}`);
                     
-                    // อัปเดต LED ให้แสดง error state
-                    controlLEDByActiveJob({ level, block });
+                    // ⚠️ ไม่ต้อง call controlLEDByActiveJob ที่นี่ เพราะ renderAll() จะ call อยู่แล้ว
                 }
                 
                 return; // จบการทำงานสำหรับ position barcode
@@ -2042,12 +2041,11 @@ function getCellCapacity(level, block) {
                     wrongCell.classList.remove('selected-task');
                 }
                 
-                // แสดง notification และ report error
+                // แสดง notification และ report error (ใช้รูปแบบ L${level}B${block})
                 showNotification(`🔘❌ Wrong button! Expected: L${expectedLevel}B${expectedBlock}, Got: L${actualLevel}B${actualBlock}`, 'error');
                 reportJobError('WRONG_LOCATION', `Button pressed at wrong location: L${actualLevel}B${actualBlock}, Expected: L${expectedLevel}B${expectedBlock}`);
                 
-                // อัปเดต LED ให้แสดง error state (ถ้ามี LED controller)
-                controlLEDByActiveJob({ level: actualLevel, block: actualBlock });
+                // ⚠️ ไม่ต้อง call controlLEDByActiveJob ที่นี่ เพราะ renderAll() จะ call อยู่แล้ว
             }
         }
         
@@ -2468,9 +2466,9 @@ function getCellCapacity(level, block) {
             const block = Number(activeJob.block);
             
             // ช่องเป้าหมาย: สีฟ้าสำหรับ target position
-            let targetColor = { r: 0, g: 100, b: 255 }; // สีฟ้าชัดเจน
+            let targetColor = { r: 0, g: 0, b: 255 }; // สีฟ้าล้วน (ไม่มีเขียวผสม)
             if (activeJob.place_flg === '0') {
-                targetColor = { r: 0, g: 100, b: 255 }; // สีฟ้าสำหรับ pick
+                targetColor = { r: 0, g: 0, b: 255 }; // สีฟ้าล้วนสำหรับ pick
             }
 
             console.log(`💡 LED Control: Active job L${level}B${block}, Place=${activeJob.place_flg}`);
@@ -2483,7 +2481,7 @@ function getCellCapacity(level, block) {
                     
                     // ถ้าอยู่ใน error state และมี wrong location
                     if (activeJob.error && activeJob.errorType === 'WRONG_LOCATION' && activeJob.errorMessage) {
-                        const match = activeJob.errorMessage.match(/L(\d+)-B(\d+)/);
+                        const match = activeJob.errorMessage.match(/L(\d+)B(\d+)/);
                         if (match) {
                             const wrongLevel = Number(match[1]);
                             const wrongBlock = Number(match[2]);
