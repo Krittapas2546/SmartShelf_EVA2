@@ -144,3 +144,20 @@ class GatewayLEDcommand(BaseModel):
     level: str = Field(..., example="1")
     block: str = Field(..., example="2")
     color: Optional[str] = Field(None, example="blue")
+    
+class APILEDcommand(BaseModel):
+    """Multiple LEDs:
+    {
+        "positions": [
+            {"position": "L1B1", "r": 255, "g": 0, "b": 0},
+            {"position": "L2B3", "r": 0, "g": 255, "b": 0}
+        ],
+        "clear_first": true  // optional
+    }"""
+    mode : Optional[str] = Field("multiple", example="multiple",)
+    positions: List[LEDPosition] = Field(..., example=[
+        {"position": "L1B1", "r": 255, "g": 0, "b": 0},
+        {"position": "L2B3", "r": 0, "g": 255, "b": 0},
+        {"position": "L3B1", "r": 0, "g": 0, "b": 255}
+    ])
+    clear_first: Optional[bool] = Field(False, example=True)

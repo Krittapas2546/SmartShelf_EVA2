@@ -13,7 +13,7 @@ from datetime import datetime
 from core.led_controller import set_led
 
 # --- Import จากไฟล์ที่เราสร้างขึ้น ---
-from core.models import JobRequest, ErrorRequest, LEDPositionRequest, LEDPositionsRequest, LEDClearAndBatch, LMSCheckShelfRequest, LMSCheckShelfResponse, ShelfComplete, ShelfState, BlockState, LotData, LayoutRequest, LayoutResponse, SlotData, GatewayLEDcommand
+from core.models import APILEDcommand, JobRequest, ErrorRequest, LEDPositionRequest, LEDPositionsRequest, LEDClearAndBatch, LMSCheckShelfRequest, LMSCheckShelfResponse, ShelfComplete, ShelfState, BlockState, LotData, LayoutRequest, LayoutResponse, SlotData, GatewayLEDcommand
 from core.database import (
     DB, get_job_by_id, get_lots_in_position, add_lot_to_position, remove_lot_from_position, update_lot_quantity, validate_position, get_shelf_info, SHELF_CONFIG, update_lot_biz, get_cell_capacity, update_layout_from_gateway, get_layout_info, is_layout_loaded_from_gateway, log_current_layout, get_layout_status
 )
@@ -368,7 +368,7 @@ templates = Jinja2Templates(directory=str(pathlib.Path(__file__).parent.parent /
 # === Simplified LED Control API (3 endpoints only) ===
 
 @router.post("/api/led", tags=["LED Control"])
-async def control_led_universal(request: Request):
+async def control_led_universal(request: APILEDcommand):
     """
     Universal LED control - รองรับทั้ง single และ batch control
     
@@ -388,121 +388,68 @@ async def control_led_universal(request: Request):
     }
     """
     try:
-        data = await request.json()
+        # ใช้ข้อมูลจาก APILEDcommand model โดยตรง
+        positions = request.positions
+        clear_first = request.clear_first or False
         
-        # === Single LED Control ===
-        if "position" in data:
-            position = data.get("position", "").upper().strip()
-            r = int(data.get("r", 0))
-            g = int(data.get("g", 0))
-            b = int(data.get("b", 255))
+        if not positions or len(positions) == 0:
+            return JSONResponse(status_code=400, content={
+                "error": "positions must be a non-empty array"
+            })
+        
+        # Clear LEDs first if requested
+        if clear_first:
+            from core.led_controller import clear_all_leds
+            clear_all_leds()
+        
+        led_commands = []
+        invalid_positions = []
+        
+        # Parse and validate all positions
+        import re
+        for i, pos_data in enumerate(positions):
+            position = pos_data.position.upper().strip()
+            r = pos_data.r
+            g = pos_data.g
+            b = pos_data.b
             
-            # Parse position
-            import re
             match = re.match(r'^L(\d+)B(\d+)$', position)
             if not match:
-                return JSONResponse(status_code=400, content={
-                    "error": "Invalid position format", 
-                    "message": "Position must be L{level}B{block} (e.g., L1B1)"
-                })
-            
+                invalid_positions.append(f"Index {i}: Invalid format '{position}'")
+                continue
+                
             level, block = int(match.group(1)), int(match.group(2))
             
             if not validate_position(level, block):
-                return JSONResponse(status_code=400, content={
-                    "error": "Invalid position", 
-                    "message": f"Position {position} not found in shelf config"
-                })
+                invalid_positions.append(f"Index {i}: Position {position} not found")
+                continue
             
-            # Control single LED
-            result = set_led(level, block, r, g, b)
-            
-            if not result.get("ok", False):
-                return JSONResponse(status_code=500, content={
-                    "error": "LED control failed",
-                    "message": result.get("error", "Unknown error"),
-                    "position": position
-                })
-            
-            hex_color = f"#{r:02x}{g:02x}{b:02x}"
-            print(f"💡 LED: {position} = {hex_color} ✅")
-            
-            return {
-                "ok": True,
-                "mode": "single",
-                "position": position,
-                "color": {"r": r, "g": g, "b": b, "hex": hex_color}
-            }
-            
-        # === Batch LED Control ===
-        elif "positions" in data:
-            positions = data.get("positions", [])
-            clear_first = data.get("clear_first", False)
-            
-            if not isinstance(positions, list) or len(positions) == 0:
-                return JSONResponse(status_code=400, content={
-                    "error": "positions must be a non-empty array"
-                })
-            
-            # Clear LEDs first if requested
-            if clear_first:
-                from core.led_controller import clear_all_leds
-                clear_all_leds()
-            
-            led_commands = []
-            invalid_positions = []
-            
-            # Parse and validate all positions
-            import re
-            for i, pos_data in enumerate(positions):
-                position = pos_data.get("position", "").upper().strip()
-                r = int(pos_data.get("r", 0))
-                g = int(pos_data.get("g", 0)) 
-                b = int(pos_data.get("b", 255))
-                
-                match = re.match(r'^L(\d+)B(\d+)$', position)
-                if not match:
-                    invalid_positions.append(f"Index {i}: Invalid format '{position}'")
-                    continue
-                    
-                level, block = int(match.group(1)), int(match.group(2))
-                
-                if not validate_position(level, block):
-                    invalid_positions.append(f"Index {i}: Position {position} not found")
-                    continue
-                
-                led_commands.append({
-                    "level": level, "block": block, "r": r, "g": g, "b": b,
-                    "position": position, "hex": f"#{r:02x}{g:02x}{b:02x}"
-                })
-            
-            if invalid_positions:
-                return JSONResponse(status_code=400, content={
-                    "error": "Invalid positions found",
-                    "invalid_positions": invalid_positions,
-                    "valid_count": len(led_commands)
-                })
-            
-            # Execute batch commands
-            from core.led_controller import set_led_batch
-            result = set_led_batch(led_commands)
-            
-            print(f"💡 LED Batch: {len(led_commands)} positions {'(cleared first)' if clear_first else ''}")
-            
-            return {
-                "ok": True,
-                "mode": "batch",
-                "cleared_first": clear_first,
-                "count": len(led_commands),
-                "positions": [cmd["position"] for cmd in led_commands],
-                "colors": [{"position": cmd["position"], "hex": cmd["hex"]} for cmd in led_commands]
-            }
-        
-        else:
-            return JSONResponse(status_code=400, content={
-                "error": "Invalid request format",
-                "message": "Must include either 'position' (single) or 'positions' (batch)"
+            led_commands.append({
+                "level": level, "block": block, "r": r, "g": g, "b": b,
+                "position": position, "hex": f"#{r:02x}{g:02x}{b:02x}"
             })
+        
+        if invalid_positions:
+            return JSONResponse(status_code=400, content={
+                "error": "Invalid positions found",
+                "invalid_positions": invalid_positions,
+                "valid_count": len(led_commands)
+            })
+        
+        # Execute batch commands
+        from core.led_controller import set_led_batch
+        result = set_led_batch(led_commands)
+        
+        print(f"💡 LED Batch: {len(led_commands)} positions {'(cleared first)' if clear_first else ''}")
+        
+        return {
+            "ok": True,
+            "mode": "batch",
+            "cleared_first": clear_first,
+            "count": len(led_commands),
+            "positions": [cmd["position"] for cmd in led_commands],
+            "colors": [{"position": cmd["position"], "hex": cmd["hex"]} for cmd in led_commands]
+        }
         
     except Exception as e:
         return JSONResponse(status_code=400, content={
@@ -511,6 +458,7 @@ async def control_led_universal(request: Request):
         })
 
 
+    
     
 
 @router.post("/api/led/clear", tags=["System"])
@@ -609,6 +557,118 @@ async def led_control_by_level_block(request: GatewayLEDcommand):
     except Exception as e:
         return JSONResponse(status_code=400, content={
             "error": "Request processing failed",
+            "detail": str(e)
+        })
+
+
+@router.post("/api/led/debug", tags=["LED Control"])
+async def debug_led_mapping(request: Request):
+    """
+    Debug endpoint to test LED mapping and colors
+    
+    Example:
+    {
+        "test_type": "mapping",  // "mapping", "colors", "positions"
+        "position": "L1B1",     // optional for specific position test
+        "show_green": false     // optional to force green test
+    }
+    """
+    try:
+        data = await request.json()
+        test_type = data.get("test_type", "mapping")
+        position = data.get("position", "")
+        show_green = data.get("show_green", False)
+        
+        results = []
+        
+        if test_type == "mapping":
+            # Test L1B1, L1B2, L1B3 mapping
+            test_positions = ["L1B1", "L1B2", "L1B3"]
+            for pos in test_positions:
+                import re
+                match = re.match(r'^L(\d+)B(\d+)$', pos)
+                if match:
+                    level, block = int(match.group(1)), int(match.group(2))
+                    
+                    # Test blue color (no green)
+                    from core.led_controller import set_led
+                    result = set_led(level, block, 0, 0, 255)  # Pure blue
+                    
+                    results.append({
+                        "position": pos,
+                        "level": level,
+                        "block": block,
+                        "color": "blue",
+                        "rgb": [0, 0, 255],
+                        "result": result
+                    })
+                    
+                    # Wait and turn off
+                    import time
+                    time.sleep(0.5)
+                    set_led(level, block, 0, 0, 0)  # Turn off
+        
+        elif test_type == "colors":
+            # Test different colors at L1B2
+            if position:
+                import re
+                match = re.match(r'^L(\d+)B(\d+)$', position.upper())
+                if match:
+                    level, block = int(match.group(1)), int(match.group(2))
+                    
+                    colors = [
+                        ("red", 255, 0, 0),
+                        ("green", 0, 255, 0) if show_green else ("blue", 0, 0, 255),
+                        ("blue", 0, 0, 255),
+                        ("off", 0, 0, 0)
+                    ]
+                    
+                    from core.led_controller import set_led
+                    for color_name, r, g, b in colors:
+                        result = set_led(level, block, r, g, b)
+                        results.append({
+                            "position": position.upper(),
+                            "color": color_name,
+                            "rgb": [r, g, b],
+                            "result": result
+                        })
+                        
+                        import time
+                        time.sleep(1.0)  # Show each color for 1 second
+        
+        elif test_type == "positions":
+            # Test all positions with blue color
+            from core.database import SHELF_CONFIG
+            from core.led_controller import set_led, clear_all_leds
+            
+            # Clear first
+            clear_all_leds()
+            
+            # Test each position
+            for level in SHELF_CONFIG:
+                for block in range(1, SHELF_CONFIG[level] + 1):
+                    result = set_led(level, block, 0, 0, 255)  # Blue
+                    results.append({
+                        "position": f"L{level}B{block}",
+                        "level": level,
+                        "block": block,
+                        "result": result
+                    })
+                    
+                    import time
+                    time.sleep(0.2)  # Brief flash
+                    set_led(level, block, 0, 0, 0)  # Turn off
+        
+        return {
+            "ok": True,
+            "test_type": test_type,
+            "test_results": results,
+            "message": f"Debug test '{test_type}' completed"
+        }
+        
+    except Exception as e:
+        return JSONResponse(status_code=400, content={
+            "error": "Debug test failed",
             "detail": str(e)
         })
 

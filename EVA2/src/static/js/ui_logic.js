@@ -2101,6 +2101,8 @@ function getCellCapacity(level, block) {
             if (showMainWithQueue) {
                 // โหมด Main with Queue - แสดงหน้า Main แต่มี notification button
                 console.log('🏠 Rendering Main view with queue notification');
+                // ไม่ควบคุม LED เมื่ออยู่ในโหมด Main with Queue
+                fetch('/api/led/clear', { method: 'POST' }).catch(e => console.warn('LED clear failed:', e));
                 queueSelectionView.style.display = 'none';
                 mainView.style.display = 'flex';
                 renderActiveJob(); // แสดง shelf แบบ full mode
@@ -2108,17 +2110,18 @@ function getCellCapacity(level, block) {
             } else if (queue.length > 0 && !activeJob) {
                 // แสดงหน้า Queue Selection
                 console.log('📋 Rendering Queue Selection view');
+                // ไม่ควบคุม LED เมื่ออยู่ในหน้า Queue Selection เพื่อประหยัดพลังงาน
+                fetch('/api/led/clear', { method: 'POST' }).catch(e => console.warn('LED clear failed:', e));
                 mainView.style.display = 'none';
                 queueSelectionView.style.display = 'block';
                 renderQueueSelectionView(queue);
-                // controlLEDByQueue(); ปิดการควบคุม LED ในหน้า Queue
             } else if (activeJob) {
                 // แสดงหน้า Active Job
                 console.log('🎯 Rendering Active Job view');
                 showMainWithQueue = false; // รีเซ็ต flag
                 stopAutoReturnTimer(); // หยุด timer
                 stopActivityDetection(); // หยุดตรวจจับกิจกรรม
-                controlLEDByActiveJob();
+                controlLEDByActiveJob(); // ควบคุม LED เฉพาะเมื่อมี active job
                 queueSelectionView.style.display = 'none';
                 mainView.style.display = 'flex';
                 renderActiveJob();
@@ -2130,6 +2133,8 @@ function getCellCapacity(level, block) {
                 showMainWithQueue = false;
                 stopAutoReturnTimer();
                 stopActivityDetection();
+                // ปิด LED เมื่อไม่มีงานใดๆ
+                fetch('/api/led/clear', { method: 'POST' }).catch(e => console.warn('LED clear failed:', e));
                 queueSelectionView.style.display = 'none';
                 mainView.style.display = 'flex';
                 renderActiveJob();
@@ -2505,13 +2510,13 @@ function getCellCapacity(level, block) {
                     
                     // โหมดปกติ - จุด LED เดียว
                     console.log(`💡 LED Normal Mode: Target L${level}B${block}`);
+                    const positions = [
+                        { position: `L${level}B${block}`, ...targetColor }
+                    ];
                     return fetch('/api/led', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ 
-                            position: `L${level}B${block}`, 
-                            ...targetColor
-                        })
+                        body: JSON.stringify({ positions })
                     });
                 })
                 .then(response => {

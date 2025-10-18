@@ -239,6 +239,11 @@ except ImportError:
                 
             _led_state[i] = (r, g, b)
             position_str = f"L{level}B{block}"
+            
+            # 🔍 Debug: ตรวจสอบสีที่ส่งมา (Mock)
+            if g > 0:
+                print(f"⚠️ WARNING: Green detected in mock! L{level}B{block} -> RGB({r},{g},{b})")
+            
             print(f"[MOCK] ✅ LED {position_str} -> index {i}, color=({r},{g},{b}), state_size={len(_led_state)}")
             result = {"ok": True, "index": i, "position": position_str, "mock": True}
             return result
