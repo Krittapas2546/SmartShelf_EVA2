@@ -474,6 +474,48 @@ async def clear_leds():
         return JSONResponse(status_code=500, content={"error": "LED clear failed", "detail": str(e)})
 
 
+@router.post("/api/led/turn-off", tags=["LED Control"])
+async def turn_off_specific_leds(request: dict):
+    """
+    Turn off specific LED positions without affecting others
+    
+    ## Example:
+    ```json
+    {
+        "positions": [
+            {"level": "1", "block": "2"},
+            {"level": "2", "block": "3"}
+        ]
+    }
+    ```
+    """
+    try:
+        from core.led_controller import turn_off_some
+        
+        positions = request.get("positions", [])
+        if not positions:
+            return {"ok": True, "message": "No positions specified"}
+        
+        # แปลง positions เป็นรูปแบบที่ turn_off_some ใช้
+        indices = []
+        for pos in positions:
+            level = int(pos.get("level", 0))
+            block = int(pos.get("block", 0))
+            indices.append((level, block))
+        
+        turn_off_some(indices)
+        
+        print(f"💡 Turned off LEDs at positions: {indices}")
+        
+        return {
+            "ok": True, 
+            "positions_turned_off": len(indices),
+            "positions": indices
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": "LED turn-off failed", "detail": str(e)})
+
+
 @router.post("/api/led/control", tags=["LED Control"])
 async def led_control_by_level_block(request: GatewayLEDcommand):
     """
