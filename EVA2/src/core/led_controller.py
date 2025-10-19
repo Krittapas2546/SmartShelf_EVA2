@@ -2,19 +2,34 @@
 
 from core.database import get_shelf_config
 
-# ---------- Mapping (ซ้าย→ขวา ทุกชั้น) ----------
+# ---------- Hardware LED Mapping (ตามข้อกำหนด hardware จริง) ----------
 def _total_pixels(cfg: dict) -> int:
+    """คำนวณจำนวน LED ทั้งหมดจาก shelf configuration"""
     return sum(int(v) for v in cfg.values())
 
 def idx(level: int, block: int) -> int:
-    """L1B1 คือ index 0, ไม่ reverse, รองรับ blocks ต่อชั้นไม่เท่ากัน"""
+    """
+    แปลง (level, block) -> LED index
+    - เริ่มที่ L<top> B1 = 0
+    - ซ้าย→ขวาในชั้น, แล้วลงชั้นถัดไป
+    - ตัวอย่าง: L4B1=0, L4B2=1, ..., L3B1=6, L3B2=7, ..., L1B6=23
+    """
     cfg = get_shelf_config()
+    # ตรวจสอบตำแหน่งมีจริง
     if level not in cfg or not (1 <= block <= int(cfg[level])):
         return -1
+
+    # ลำดับชั้นจากบนลงล่าง: 4,3,2,1, ...
+    order = sorted(cfg.keys(), reverse=True)
+
+    # offset = รวมจำนวนบล็อกจากทุกชั้นที่อยู่ "เหนือ" ชั้นเป้าหมาย
     offset = 0
-    for l in sorted(cfg):
-        if l < level:
-            offset += int(cfg[l])
+    for lv in order:
+        if lv == level:
+            break
+        offset += int(cfg[lv])
+
+    # index ภายในชั้น = block เริ่มที่ 1
     return offset + (block - 1)
 
 # ---------- State / Hardware ----------
@@ -111,3 +126,86 @@ except ImportError:
         _led_state = [(0, 0, 0)] * len(_led_state)
         print(f"[MOCK] clear {len(_led_state)}")
         return {"ok": True}
+
+# ---------- Debug Functions ----------
+def debug_mapping():
+    """Debug function สำหรับตรวจสอบ LED mapping แบบ sequential python -c "from core.led_controller import debug_mapping; debug_mapping()" """
+    cfg = get_shelf_config()
+    total = _total_pixels(cfg)
+    
+    print(f"📍 LED Sequential Mapping Debug")
+    print(f"Shelf Config: {cfg}")
+    print(f"Total Pixels: {total}")
+    print(f"Wire Pattern: Top-Left (L4B1=0) → Left-to-Right per level → Jump to next level left")
+    print(f"{'Level':<6} {'Block':<6} {'Index':<6} {'Position':<12}")
+    print("-" * 40)
+    
+    # แสดงตามลำดับชั้นจากบนลงล่าง
+    for level in sorted(cfg.keys(), reverse=True):
+        for block in range(1, int(cfg[level]) + 1):
+            index = idx(level, block)
+            position = f"L{level}B{block}"
+            print(f"{level:<6} {block:<6} {index:<6} {position:<12}")
+    
+    return {"config": cfg, "total_pixels": total}
+
+def validate_expected_mapping():
+    """ตรวจสอบ mapping ตามที่คาดหวัง - ตรงกับการเดินสายจริง"""
+    # ตัวอย่างตรวจที่สอดคล้องลวดจริง (4×6)
+    expected = {
+        (4,1): 0,   # ชั้น 4 เริ่มต้น
+        (4,6): 5,   # ชั้น 4 จบ
+        (3,1): 6,   # ชั้น 3 เริ่มต้น
+        (3,6): 11,  # ชั้น 3 จบ
+        (2,1): 12,  # ชั้น 2 เริ่มต้น
+        (2,6): 17,  # ชั้น 2 จบ
+        (1,1): 18,  # ชั้น 1 เริ่มต้น
+        (1,6): 23,  # ชั้น 1 จบ
+    }
+    
+    print("🔍 Validating Expected Mapping:")
+    all_correct = True
+    
+    for (level, block), expected_idx in expected.items():
+        actual_idx = idx(level, block)
+        status = "✅" if actual_idx == expected_idx else "❌"
+        print(f"{status} L{level}B{block} -> {actual_idx} (expected {expected_idx})")
+        if actual_idx != expected_idx:
+            all_correct = False
+    
+    return all_correct
+
+# ---------- Helper Functions ----------
+def get_led_range_for_level(level: int) -> tuple:
+    """
+    ส่งกลับ (start_index, end_index) สำหรับชั้นที่ระบุ
+    ใช้สำหรับการควบคุม LED ทั้งชั้น
+    """
+    cfg = get_shelf_config()
+    if level not in cfg:
+        return (-1, -1)
+    
+    start_idx = idx(level, 1)  # Block แรกของชั้น
+    end_idx = idx(level, int(cfg[level]))  # Block สุดท้ายของชั้น
+    
+    return (start_idx, end_idx)
+
+def create_level_led_batch(level: int, r: int, g: int, b: int) -> list:
+    """
+    สร้าง LED batch command สำหรับจุดไฟทั้งชั้น
+    """
+    cfg = get_shelf_config()
+    if level not in cfg:
+        return []
+    
+    batch = []
+    for block in range(1, int(cfg[level]) + 1):
+        batch.append({
+            'level': level,
+            'block': block, 
+            'r': r,
+            'g': g,
+            'b': b
+        })
+    
+    return batch
