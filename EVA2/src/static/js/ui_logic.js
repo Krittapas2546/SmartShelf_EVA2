@@ -639,23 +639,9 @@ function getCellCapacity(level, block) {
                 }
             }
             
-            // 🔥 Clear all LEDs when backing out from Active Job
-            console.log('💡 Clearing LEDs when leaving Active Job view');
-            fetch('/api/led/clear', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' }
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.ok) {
-                    console.log('✅ LEDs cleared successfully');
-                } else {
-                    console.warn('⚠️ LED clear failed:', data);
-                }
-            })
-            .catch(error => {
-                console.error('❌ Error clearing LEDs:', error);
-            });
+            // 🔥 Hard Clear all LEDs when backing out from Active Job
+            console.log('💡 Hard clearing LEDs when leaving Active Job view');
+            hardClearLEDs();
             
             // Clear persistent notifications when leaving Active Job view
             clearPersistentNotifications();
@@ -1830,6 +1816,9 @@ function getCellCapacity(level, block) {
                 console.log('✅ Job completed successfully via HTTP API:', data);
                 
                 if (data.status === 'success') {
+                    // แสดงสถานะสำเร็จด้วย LED สีเขียว
+                    showJobSuccess(activeJob.level, activeJob.block);
+                    
                     // แสดง notification พร้อมรายละเอียด
                     const action = data.action || 'processed';
                     const location = data.location || `L${activeJob.level}B${activeJob.block}`;
@@ -1851,8 +1840,7 @@ function getCellCapacity(level, block) {
                     await refreshShelfStateFromServer();
                     renderAll();
 
-                    // ดับไฟ LED หลังงานเสร็จ
-                    fetch('/api/led/clear', { method: 'POST' });
+                    // LED จะดับเองหลังจาก 2 วินาทีใน showJobSuccess()
                 } else {
                     throw new Error(data.message || 'Job completion failed');
                 }
@@ -2026,8 +2014,11 @@ function getCellCapacity(level, block) {
                 showNotification(`🔘✅ Correct button! Completing job for Lot ${activeJob.lot_no}...`, 'success');
                 completeCurrentJob();
             } else {
-                // ❌ กดปุ่มผิดตำแหน่ง - แสดง error เหมือน barcode scan ผิด
+                // ❌ กดปุ่มผิดตำแหน่ง - เพิ่มสีแดงและแสดง error
                 console.log(`❌ Wrong button press! Expected L${expectedLevel}B${expectedBlock}, Got L${actualLevel}B${actualBlock}`);
+                
+                // เพิ่ม LED สีแดงที่ตำแหน่งผิด (ไม่ล้างสีเดิม)
+                addErrorRedLED(actualLevel, actualBlock);
                 
                 // อัปเดต UI: ช่องถูกต้อง (selected-task), ช่องผิด (wrong-location)
                 const correctCell = document.getElementById(`cell-${expectedLevel}-${expectedBlock}`);
@@ -2044,8 +2035,6 @@ function getCellCapacity(level, block) {
                 // แสดง notification และ report error (ใช้รูปแบบ L${level}B${block})
                 showNotification(`🔘❌ Wrong button! Expected: L${expectedLevel}B${expectedBlock}, Got: L${actualLevel}B${actualBlock}`, 'error');
                 reportJobError('WRONG_LOCATION', `Button pressed at wrong location: L${actualLevel}B${actualBlock}, Expected: L${expectedLevel}B${expectedBlock}`);
-                
-                // ⚠️ ไม่ต้อง call controlLEDByActiveJob ที่นี่ เพราะ renderAll() จะ call อยู่แล้ว
             }
         }
         
@@ -2457,8 +2446,7 @@ function getCellCapacity(level, block) {
         }
 
         /**
-         * ฟังก์ชันควบคุม LED ตามสถานะ active job (logic อยู่ฝั่ง frontend)
-         * สามารถปรับ mapping สี/สถานะได้ที่นี่
+         * ฟังก์ชันควบคุม LED ตามสถานะ active job (ใช้ระบบ state-based buffer ใหม่)
          */
         function controlLEDByActiveJob(wrongLocation = null) {
             const activeJob = getActiveJob();
@@ -2471,70 +2459,119 @@ function getCellCapacity(level, block) {
             const level = Number(activeJob.level);
             const block = Number(activeJob.block);
             
-            // ช่องเป้าหมาย: สีฟ้าสำหรับ target position
-            let targetColor = { r: 0, g: 0, b: 255 }; // สีฟ้าล้วน (ไม่มีเขียวผสม)
-            if (activeJob.place_flg === '0') {
-                targetColor = { r: 0, g: 0, b: 255 }; // สีฟ้าล้วนสำหรับ pick
-            }
-
             console.log(`💡 LED Control: Active job L${level}B${block}, Place=${activeJob.place_flg}`);
 
-            // 🔥 Clear LEDs ก่อนเสมอ แล้วค่อยจุด LED ใหม่
-            return fetch('/api/led/clear', { method: 'POST' })
+            // 1. เคลียร์ LED ก่อนเสมอ (hard_clear)
+            fetch('/api/led/clear', { method: 'POST' })
+                .then(() => {
+                    // 2. แสดงช่องเป้าหมายเป็นสีน้ำเงิน (set_target_blue)
+                    return fetch('/api/led/control', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            level: level.toString(),
+                            block: block.toString(),
+                            color: 'blue'
+                        })
+                    });
+                })
                 .then(response => response.json())
-                .then(clearResult => {
-                    console.log('💡 LEDs cleared:', clearResult);
+                .then(data => {
+                    console.log(`💡 Target position set to blue: L${level}B${block}`, data);
                     
-                    // ถ้าอยู่ใน error state และมี wrong location
+                    // 3. ถ้าอยู่ใน error state และมีตำแหน่งผิด ให้เพิ่มสีแดงที่ตำแหน่งผิด
                     if (activeJob.error && activeJob.errorType === 'WRONG_LOCATION' && activeJob.errorMessage) {
                         const match = activeJob.errorMessage.match(/L(\d+)B(\d+)/);
                         if (match) {
                             const wrongLevel = Number(match[1]);
                             const wrongBlock = Number(match[2]);
                             
-                            console.log(`💡 LED Error Mode: Target L${level}B${block}, Wrong L${wrongLevel}B${wrongBlock}`);
+                            console.log(`💡 Adding red LED for wrong position: L${wrongLevel}B${wrongBlock}`);
                             
-                            // จุด LED 2 ดวง: เป้าหมาย และ ช่องผิด
-                            const positions = [
-                                { position: `L${level}B${block}`, ...targetColor }, // ช่องเป้าหมาย (ฟ้า/ส้ม)
-                                { position: `L${wrongLevel}B${wrongBlock}`, r: 255, g: 0, b: 0 } // ช่องผิด (แดง)
-                            ];
-                            
-                            return fetch('/api/led', {
+                            // เพิ่มสีแดงที่ตำแหน่งผิด (add_error_red)
+                            return fetch('/api/led/control', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ positions })
+                                body: JSON.stringify({
+                                    level: wrongLevel.toString(),
+                                    block: wrongBlock.toString(),
+                                    color: 'red'
+                                })
                             });
                         }
-                    }
-                    
-                    // โหมดปกติ - จุด LED เดียว
-                    console.log(`💡 LED Normal Mode: Target L${level}B${block}`);
-                    const positions = [
-                        { position: `L${level}B${block}`, ...targetColor }
-                    ];
-                    return fetch('/api/led', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ positions })
-                    });
-                })
-                .then(response => {
-                    if (!response.ok) {
-                        console.error('💡 LED Control failed:', response.status);
-                        return response.text().then(text => {
-                            console.error('💡 LED Error details:', text);
-                        });
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    if (data) {
-                        console.log('💡 LED Control success:', data);
                     }
                 })
                 .catch(error => {
                     console.error('💡 LED Control error:', error);
+                });
+        }
+
+        /**
+         * แสดงสถานะสำเร็จ - เปลี่ยนช่องเป้าหมายเป็นสีเขียว
+         */
+        function showJobSuccess(level, block) {
+            console.log(`💡 Job Success: L${level}B${block} -> Green`);
+            
+            fetch('/api/led/control', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    level: level.toString(),
+                    block: block.toString(),
+                    color: 'green'
+                })
+            })
+                .then(response => response.json())
+                .then(data => {
+                    console.log(`✅ Success LED shown: L${level}B${block}`, data);
+                    
+                    // รอ 2 วินาที แล้วเคลียร์
+                    setTimeout(() => {
+                        fetch('/api/led/clear', { method: 'POST' })
+                            .then(() => console.log('💡 Success LED cleared'));
+                    }, 2000);
+                })
+                .catch(error => {
+                    console.error('💡 Success LED error:', error);
+                });
+        }
+
+        /**
+         * เพิ่มสีแดงเมื่อกดปุ่มผิดตำแหน่ง (ไม่ล้างสีเดิม)
+         */
+        function addErrorRedLED(level, block) {
+            console.log(`💡 Adding error red LED: L${level}B${block}`);
+            
+            fetch('/api/led/control', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    level: level.toString(),
+                    block: block.toString(),
+                    color: 'red'
+                })
+            })
+                .then(response => response.json())
+                .then(data => {
+                    console.log(`❌ Error red LED added: L${level}B${block}`, data);
+                })
+                .catch(error => {
+                    console.error('💡 Error red LED failed:', error);
+                });
+        }
+
+        /**
+         * Hard clear LEDs เมื่อกดปุ่ม Back
+         */
+        function hardClearLEDs() {
+            console.log('💡 Hard clearing LEDs');
+            
+            fetch('/api/led/clear', { method: 'POST' })
+                .then(() => {
+                    console.log('💡 Hard clear completed');
+                })
+                .catch(error => {
+                    console.error('💡 Hard clear failed:', error);
                 });
         }
 
@@ -3651,3 +3688,9 @@ window.getCellCapacityInfo = getCellCapacityInfo;
 window.refreshCellCapacities = refreshCellCapacities;
 window.resetPendingJobsFlag = resetPendingJobsFlag;
 window.loadLayoutFromGateway = loadLayoutFromGateway;
+
+// ทำให้ฟังก์ชัน LED ใหม่เป็น global
+window.showJobSuccess = showJobSuccess;
+window.addErrorRedLED = addErrorRedLED;
+window.hardClearLEDs = hardClearLEDs;
+window.controlLEDByActiveJob = controlLEDByActiveJob;

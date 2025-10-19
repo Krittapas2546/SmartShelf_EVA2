@@ -34,98 +34,197 @@ def idx(level: int, block: int) -> int:
 
 # ---------- State / Hardware ----------
 NUM_PIXELS = _total_pixels(get_shelf_config())
-_led_state = [(0, 0, 0)] * max(1, NUM_PIXELS)
+
+# ---------- ซอฟต์บัฟเฟอร์สถานะ ----------
+state = [(0, 0, 0)] * max(1, NUM_PIXELS)  # เก็บสีของทุกดวง (r,g,b)
 
 try:
     import pi5neo, time
     neo = pi5neo.Pi5Neo('/dev/spidev0.0', NUM_PIXELS, 800)
+    
+    def show_state():
+        """เรนเดอร์ทั้งเส้นจากบัฟเฟอร์ในครั้งเดียว"""
+        for i, (r, g, b) in enumerate(state):
+            neo.set_led_color(i, r, g, b)
+        neo.update_strip()
+
+    def set_pixels(pairs):
+        """
+        เพิ่ม/เปลี่ยนสีบางดวงโดย 'ไม่ล้างของเดิม'
+        pairs: [(level, block, (r,g,b)), ...] หรือ [(index, (r,g,b)), ...]
+        """
+        for item in pairs:
+            if len(item) == 3 and isinstance(item[0], int) and isinstance(item[1], int):
+                # รูปแบบ (level, block, (r,g,b))
+                level, block, (r, g, b) = item
+                i = idx(level, block)
+            else:
+                # รูปแบบ (index, (r,g,b))
+                i, (r, g, b) = item
+            
+            if 0 <= i < NUM_PIXELS:
+                state[i] = (int(r), int(g), int(b))
+        show_state()
+
+    def turn_off_some(indices):
+        """ดับเฉพาะบางดวง โดยคงดวงอื่นไว้ตามบัฟเฟอร์"""
+        for i in indices:
+            if isinstance(i, tuple) and len(i) == 2:
+                # รูปแบบ (level, block)
+                level, block = i
+                i = idx(level, block)
+            
+            if 0 <= i < NUM_PIXELS:
+                state[i] = (0, 0, 0)
+        show_state()
+
+    def hard_clear(pause=0.02, repeat=2):
+        """ล้างทั้งเส้นแบบชัวร์ แล้วซิงค์บัฟเฟอร์ให้เป็นศูนย์"""
+        global state
+        for _ in range(repeat):
+            neo.fill_strip(0, 0, 0)
+            neo.update_strip()
+            time.sleep(pause)
+        state = [(0, 0, 0)] * NUM_PIXELS  # ซิงค์บัฟเฟอร์ให้ตรงกับฮาร์ดแวร์
 
     def refresh_led_config():
-        global neo, NUM_PIXELS, _led_state
+        """รีเฟรชการตั้งค่า LED เมื่อมีการเปลี่ยนแปลง config"""
+        global neo, NUM_PIXELS, state
         cfg = get_shelf_config()
         new_pixels = _total_pixels(cfg)
         if new_pixels != NUM_PIXELS:
             NUM_PIXELS = new_pixels
-            _led_state = [(0, 0, 0)] * max(1, NUM_PIXELS)
+            state = [(0, 0, 0)] * max(1, NUM_PIXELS)
             neo = pi5neo.Pi5Neo('/dev/spidev0.0', NUM_PIXELS, 800)
-        # clear ด้วยคำสั่งที่คุณต้องการ
-        neo.fill_strip(0, 0, 0)
-        neo.update_strip()
-        time.sleep(0.01)
+        hard_clear()
         print(f"💡 LED reinit: {NUM_PIXELS} pixels")
-
-    def set_led(level, block, r, g, b):
-        i = idx(level, block)
-        if i < 0 or i >= NUM_PIXELS:
-            return {"ok": False, "error": f"Invalid L{level}B{block}"}
-        _led_state[i] = (r, g, b)
-        neo.set_led_color(i, r, g, b)
-        neo.update_strip()
-        time.sleep(0.002)
-        return {"ok": True, "index": i}
-
-    def set_led_batch(leds):
-        errors, count = [], 0
-        # clear ก่อนเสมอด้วยคำสั่งที่กำหนด
-        neo.fill_strip(0, 0, 0)
-        for led in leds:
-            lv = int(led.get('level', 0))
-            bk = int(led.get('block', 0))
-            r  = int(led.get('r', 0)); g = int(led.get('g', 0)); b = int(led.get('b', 0))
-            i = idx(lv, bk)
-            if 0 <= i < NUM_PIXELS:
-                _led_state[i] = (r, g, b)
-                neo.set_led_color(i, r, g, b)
-                count += 1
-            else:
-                errors.append(f"L{lv}B{bk}: invalid")
-        neo.update_strip()
-        time.sleep(0.003)
-        out = {"ok": True, "count": count, "total_requested": len(leds)}
-        if errors: out["errors"] = errors
-        return out
-
-    def clear_all_leds():
-        global _led_state
-        _led_state = [(0, 0, 0)] * NUM_PIXELS
-        neo.fill_strip(0, 0, 0)
-        neo.update_strip()
-        time.sleep(0.01)
-        return {"ok": True, "pixels_cleared": NUM_PIXELS}
 
 except ImportError:
     # -------- MOCK fallback (ไม่มีฮาร์ดแวร์) --------
+    def show_state():
+        """MOCK: แสดงสถานะ buffer"""
+        active_pixels = [(i, rgb) for i, rgb in enumerate(state) if rgb != (0, 0, 0)]
+        if active_pixels:
+            print(f"[MOCK] Active pixels: {active_pixels}")
+        else:
+            print(f"[MOCK] All pixels OFF")
+
+    def set_pixels(pairs):
+        """MOCK: เซ็ตบางดวง"""
+        for item in pairs:
+            if len(item) == 3 and isinstance(item[0], int) and isinstance(item[1], int):
+                level, block, (r, g, b) = item
+                i = idx(level, block)
+            else:
+                i, (r, g, b) = item
+            
+            if 0 <= i < len(state):
+                state[i] = (int(r), int(g), int(b))
+                print(f"[MOCK] set pixel {i} -> ({r},{g},{b})")
+        show_state()
+
+    def turn_off_some(indices):
+        """MOCK: ดับบางดวง"""
+        for i in indices:
+            if isinstance(i, tuple) and len(i) == 2:
+                level, block = i
+                i = idx(level, block)
+            
+            if 0 <= i < len(state):
+                state[i] = (0, 0, 0)
+                print(f"[MOCK] turn off pixel {i}")
+        show_state()
+
+    def hard_clear(pause=0.02, repeat=2):
+        """MOCK: ล้างทั้งหมด"""
+        global state
+        state = [(0, 0, 0)] * len(state)
+        print(f"[MOCK] hard_clear: {len(state)} pixels")
+
     def refresh_led_config():
-        global NUM_PIXELS, _led_state
+        """MOCK: รีเฟรชการตั้งค่า"""
+        global NUM_PIXELS, state
         NUM_PIXELS = _total_pixels(get_shelf_config())
-        _led_state = [(0, 0, 0)] * max(1, NUM_PIXELS)
+        state = [(0, 0, 0)] * max(1, NUM_PIXELS)
         print(f"[MOCK] LED reinit: {NUM_PIXELS} pixels")
 
-    def set_led(level, block, r, g, b):
-        i = idx(level, block)
-        if 0 <= i < len(_led_state):
-            _led_state[i] = (r, g, b)
-            print(f"[MOCK] set i={i} -> ({r},{g},{b})")
-            return {"ok": True, "index": i, "mock": True}
-        return {"ok": False, "error": "invalid index", "mock": True}
+# ---------- High-level LED Control Functions ----------
+def set_target_blue(level, block):
+    """แสดงช่องเป้าหมายเป็นสีน้ำเงิน"""
+    hard_clear()
+    set_pixels([(level, block, (0, 0, 255))])
+    return {"ok": True, "action": "target_blue", "level": level, "block": block}
 
-    def set_led_batch(leds):
-        ok = 0; errs = []
-        for led in leds:
-            i = idx(int(led.get('level',0)), int(led.get('block',0)))
-            if 0 <= i < len(_led_state):
-                _led_state[i] = (int(led.get('r',0)), int(led.get('g',0)), int(led.get('b',0)))
-                ok += 1
+def set_target_green(level, block):
+    """เปลี่ยนช่องเป้าหมายเป็นสีเขียว (สำเร็จ)"""
+    set_pixels([(level, block, (0, 255, 0))])
+    return {"ok": True, "action": "target_green", "level": level, "block": block}
+
+def add_error_red(level, block):
+    """เพิ่มช่องผิดเป็นสีแดง (ไม่ล้างของเดิม)"""
+    set_pixels([(level, block, (255, 0, 0))])
+    return {"ok": True, "action": "error_red", "level": level, "block": block}
+
+def clear_all_leds():
+    """ล้างไฟทั้งหมด"""
+    hard_clear()
+    return {"ok": True, "pixels_cleared": NUM_PIXELS}
+
+# ---------- API Compatibility Functions ----------
+def set_led_batch(leds):
+    """
+    API compatibility function สำหรับ batch LED commands
+    leds: [{"level": 1, "block": 2, "r": 255, "g": 0, "b": 0}, ...]
+    """
+    if not leds:
+        return {"ok": True, "count": 0, "total_requested": 0}
+    
+    # แปลงเป็นรูปแบบที่ set_pixels ใช้
+    pairs = []
+    errors = []
+    
+    for led in leds:
+        try:
+            level = int(led.get('level', 0))
+            block = int(led.get('block', 0))
+            r = int(led.get('r', 0))
+            g = int(led.get('g', 0))
+            b = int(led.get('b', 0))
+            
+            # ตรวจสอบว่าตำแหน่งถูกต้อง
+            i = idx(level, block)
+            if i >= 0:
+                pairs.append((level, block, (r, g, b)))
             else:
-                errs.append(str(led))
-        print(f"[MOCK] batch set {ok}/{len(leds)}")
-        return {"ok": True, "count": ok, "errors": errs, "mock": True}
+                errors.append(f"L{level}B{block}: invalid position")
+        except (ValueError, TypeError) as e:
+            errors.append(f"Invalid LED data: {led}")
+    
+    # ล้างก่อนแล้วเซ็ตใหม่
+    hard_clear()
+    if pairs:
+        set_pixels(pairs)
+    
+    result = {
+        "ok": True,
+        "count": len(pairs),
+        "total_requested": len(leds)
+    }
+    if errors:
+        result["errors"] = errors
+    
+    return result
 
-    def clear_all_leds():
-        global _led_state
-        _led_state = [(0, 0, 0)] * len(_led_state)
-        print(f"[MOCK] clear {len(_led_state)}")
-        return {"ok": True}
+def set_led(level, block, r, g, b):
+    """
+    API compatibility function สำหรับ single LED command
+    """
+    i = idx(level, block)
+    if i < 0 or i >= NUM_PIXELS:
+        return {"ok": False, "error": f"Invalid L{level}B{block}"}
+    
+    set_pixels([(level, block, (r, g, b))])
+    return {"ok": True, "index": i}
 
 # ---------- Debug Functions ----------
 def debug_mapping():
@@ -209,3 +308,42 @@ def create_level_led_batch(level: int, r: int, g: int, b: int) -> list:
         })
     
     return batch
+
+def light_entire_level(level: int, r: int, g: int, b: int):
+    """จุดไฟทั้งชั้นด้วยสีที่กำหนด"""
+    cfg = get_shelf_config()
+    if level not in cfg:
+        return {"ok": False, "error": f"Invalid level {level}"}
+    
+    pairs = []
+    for block in range(1, int(cfg[level]) + 1):
+        pairs.append((level, block, (r, g, b)))
+    
+    set_pixels(pairs)
+    return {"ok": True, "level": level, "blocks_lit": len(pairs)}
+
+def get_current_state():
+    """ส่งคืนสถานะปัจจุบันของ LED buffer"""
+    active_leds = []
+    for i, (r, g, b) in enumerate(state):
+        if (r, g, b) != (0, 0, 0):
+            # แปลง index กลับเป็น level, block
+            cfg = get_shelf_config()
+            for level in sorted(cfg.keys(), reverse=True):
+                level_start = idx(level, 1)
+                level_end = idx(level, int(cfg[level]))
+                if level_start <= i <= level_end:
+                    block = (i - level_start) + 1
+                    active_leds.append({
+                        "index": i,
+                        "level": level,
+                        "block": block,
+                        "color": {"r": r, "g": g, "b": b}
+                    })
+                    break
+    
+    return {
+        "total_pixels": NUM_PIXELS,
+        "active_count": len(active_leds),
+        "active_leds": active_leds
+    }
