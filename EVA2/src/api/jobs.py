@@ -17,7 +17,6 @@ from core.models import APILEDcommand, JobRequest, ErrorRequest, LEDPositionRequ
 from core.database import (
     DB, get_job_by_id, get_lots_in_position, add_lot_to_position, remove_lot_from_position, update_lot_quantity, validate_position, get_shelf_info, SHELF_CONFIG, update_lot_biz, get_cell_capacity, update_layout_from_gateway, get_layout_info, is_layout_loaded_from_gateway, log_current_layout, get_layout_status
 )
-from core.lms_config import LMS_BASE_URL, LMS_ENDPOINT, LMS_API_KEY, LMS_TIMEOUT
 from api.websockets import manager # <-- import websocket manager
 
 # === Push Button Integration ===
