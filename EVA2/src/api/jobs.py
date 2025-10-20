@@ -540,12 +540,12 @@ async def led_control_by_level_block(request: GatewayLEDcommand):
             "red": (255, 0, 0),
             "green": (0, 255, 0), 
             "blue": (0, 0, 255),
-            "yellow": (255, 255, 0),
-            "purple": (128, 0, 128),
-            "orange": (255, 165, 0),
-            "white": (255, 255, 255),
-            "off": (0, 0, 0),
-            "black": (0, 0, 0)
+            # "yellow": (255, 255, 0),
+            # "purple": (128, 0, 128),
+            # "orange": (255, 165, 0),
+            # "white": (255, 255, 255),
+            # "off": (0, 0, 0),
+            # "black": (0, 0, 0)
         }
         return color_map.get(color_name.lower(), (255, 255, 255))  # default white
     
