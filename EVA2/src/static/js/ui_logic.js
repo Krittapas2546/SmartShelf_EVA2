@@ -639,9 +639,23 @@ function getCellCapacity(level, block) {
                 }
             }
             
-            // 🔥 Hard Clear all LEDs when backing out from Active Job
-            console.log('💡 Hard clearing LEDs when leaving Active Job view');
-            hardClearLEDs();
+            // 🔥 Clear all LEDs when backing out from Active Job
+            console.log('💡 Clearing LEDs when leaving Active Job view');
+            fetch('/api/led/clear', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.ok) {
+                    console.log('✅ LEDs cleared successfully');
+                } else {
+                    console.warn('⚠️ LED clear failed:', data);
+                }
+            })
+            .catch(error => {
+                console.error('❌ Error clearing LEDs:', error);
+            });
             
             // Clear persistent notifications when leaving Active Job view
             clearPersistentNotifications();
@@ -1844,12 +1858,15 @@ function getCellCapacity(level, block) {
                 console.log('✅ Job completed successfully via HTTP API:', data);
                 
                 if (data.status === 'success') {
+<<<<<<< HEAD
                     // รีเซ็ต button press flag
                     buttonPressInProgress = false;
                     
                     // แสดงสถานะสำเร็จด้วย LED สีเขียว
                     showJobSuccess(activeJob.level, activeJob.block);
                     
+=======
+>>>>>>> parent of 81beaf8 (LED_cor)
                     // แสดง notification พร้อมรายละเอียด
                     const action = data.action || 'processed';
                     const location = data.location || `L${activeJob.level}B${activeJob.block}`;
@@ -1871,10 +1888,15 @@ function getCellCapacity(level, block) {
                     await refreshShelfStateFromServer();
                     renderAll();
 
+<<<<<<< HEAD
                     // LED จะดับเองหลังจาก 2 วินาทีใน showJobSuccess()
                     
                     // รีเซ็ต job completion flag เมื่อสำเร็จ
                     jobCompletionInProgress = false;
+=======
+                    // ดับไฟ LED หลังงานเสร็จ
+                    fetch('/api/led/clear', { method: 'POST' });
+>>>>>>> parent of 81beaf8 (LED_cor)
                 } else {
                     // รีเซ็ต flags ถ้าเกิด error ด้วย
                     buttonPressInProgress = false;
@@ -2073,6 +2095,7 @@ function getCellCapacity(level, block) {
                 completeCurrentJob();
                 // buttonPressInProgress จะถูกรีเซ็ตใน completeCurrentJob
             } else {
+<<<<<<< HEAD
                 // ❌ กดปุ่มผิดตำแหน่ง - เพิ่มสีแดงโดยไม่เรียก renderAll()
                 console.log(`❌ Wrong button press! Expected L${expectedLevel}B${expectedBlock}, Got L${actualLevel}B${actualBlock}`);
                 
@@ -2080,6 +2103,12 @@ function getCellCapacity(level, block) {
                 addErrorRedLED(actualLevel, actualBlock);
                 
                 // อัปเดต UI classes โดยตรง (ไม่ผ่าน renderAll)
+=======
+                // ❌ กดปุ่มผิดตำแหน่ง - แสดง error เหมือน barcode scan ผิด
+                console.log(`❌ Wrong button press! Expected L${expectedLevel}B${expectedBlock}, Got L${actualLevel}B${actualBlock}`);
+                
+                // อัปเดต UI: ช่องถูกต้อง (selected-task), ช่องผิด (wrong-location)
+>>>>>>> parent of 81beaf8 (LED_cor)
                 const correctCell = document.getElementById(`cell-${expectedLevel}-${expectedBlock}`);
                 if (correctCell) {
                     correctCell.classList.add('selected-task');
@@ -2095,10 +2124,14 @@ function getCellCapacity(level, block) {
                 showNotification(`🔘❌ Wrong button! Expected: L${expectedLevel}B${expectedBlock}, Got: L${actualLevel}B${actualBlock}`, 'error');
                 reportJobError('WRONG_LOCATION', `Button pressed at wrong location: L${actualLevel}B${actualBlock}, Expected: L${expectedLevel}B${expectedBlock}`);
                 
+<<<<<<< HEAD
                 // รีเซ็ต flag หลังจากจัดการ error เสร็จ
                 setTimeout(() => {
                     buttonPressInProgress = false;
                 }, 500);
+=======
+                // ⚠️ ไม่ต้อง call controlLEDByActiveJob ที่นี่ เพราะ renderAll() จะ call อยู่แล้ว
+>>>>>>> parent of 81beaf8 (LED_cor)
             }
         }
         
@@ -2547,8 +2580,13 @@ function getCellCapacity(level, block) {
         const LED_CONTROL_DEBOUNCE_TIME = 500; // 0.5 วินาที
 
         /**
+<<<<<<< HEAD
          * ควบคุม LED เฉพาะตอนเลือก job ใหม่เท่านั้น (ไม่เรียกใน render)
          * แยกออกจาก render cycle เพื่อป้องกันการยิงซ้ำ
+=======
+         * ฟังก์ชันควบคุม LED ตามสถานะ active job (logic อยู่ฝั่ง frontend)
+         * สามารถปรับ mapping สี/สถานะได้ที่นี่
+>>>>>>> parent of 81beaf8 (LED_cor)
          */
         function controlLEDByActiveJob() {
             if (ledControlInProgress) {
@@ -2569,6 +2607,7 @@ function getCellCapacity(level, block) {
             const level = Number(activeJob.level);
             const block = Number(activeJob.block);
             
+<<<<<<< HEAD
             console.log(`💡 LED Control: Setting target blue for NEW job L${level}B${block}`);
 
             // เคลียร์และตั้งเป้าหมายเป็นสีน้ำเงินเฉพาะตอนเลือก job ใหม่
@@ -2587,27 +2626,68 @@ function getCellCapacity(level, block) {
                 .then(response => response.json())
                 .then(data => {
                      console.log(`💡 Target position set to blue: L${level}B${block}`, data);
+=======
+            // ช่องเป้าหมาย: สีฟ้าสำหรับ target position
+            let targetColor = { r: 0, g: 0, b: 255 }; // สีฟ้าล้วน (ไม่มีเขียวผสม)
+            if (activeJob.place_flg === '0') {
+                targetColor = { r: 0, g: 0, b: 255 }; // สีฟ้าล้วนสำหรับ pick
+            }
+
+            console.log(`💡 LED Control: Active job L${level}B${block}, Place=${activeJob.place_flg}`);
+
+            // 🔥 Clear LEDs ก่อนเสมอ แล้วค่อยจุด LED ใหม่
+            return fetch('/api/led/clear', { method: 'POST' })
+                .then(response => response.json())
+                .then(clearResult => {
+                    console.log('💡 LEDs cleared:', clearResult);
+>>>>>>> parent of 81beaf8 (LED_cor)
                     
-                    // 3. ถ้าอยู่ใน error state และมีตำแหน่งผิด ให้เพิ่มสีแดงที่ตำแหน่งผิด
+                    // ถ้าอยู่ใน error state และมี wrong location
                     if (activeJob.error && activeJob.errorType === 'WRONG_LOCATION' && activeJob.errorMessage) {
                         const match = activeJob.errorMessage.match(/L(\d+)B(\d+)/);
                         if (match) {
                             const wrongLevel = Number(match[1]);
                             const wrongBlock = Number(match[2]);
                             
-                            console.log(`💡 Adding red LED for wrong position: L${wrongLevel}B${wrongBlock}`);
+                            console.log(`💡 LED Error Mode: Target L${level}B${block}, Wrong L${wrongLevel}B${wrongBlock}`);
                             
-                            // เพิ่มสีแดงที่ตำแหน่งผิด (add_error_red)
-                            return fetch('/api/led/control', {
+                            // จุด LED 2 ดวง: เป้าหมาย และ ช่องผิด
+                            const positions = [
+                                { position: `L${level}B${block}`, ...targetColor }, // ช่องเป้าหมาย (ฟ้า/ส้ม)
+                                { position: `L${wrongLevel}B${wrongBlock}`, r: 255, g: 0, b: 0 } // ช่องผิด (แดง)
+                            ];
+                            
+                            return fetch('/api/led', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                    level: wrongLevel.toString(),
-                                    block: wrongBlock.toString(),
-                                    color: 'red'
-                                })
+                                body: JSON.stringify({ positions })
                             });
                         }
+                    }
+                    
+                    // โหมดปกติ - จุด LED เดียว
+                    console.log(`💡 LED Normal Mode: Target L${level}B${block}`);
+                    const positions = [
+                        { position: `L${level}B${block}`, ...targetColor }
+                    ];
+                    return fetch('/api/led', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ positions })
+                    });
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        console.error('💡 LED Control failed:', response.status);
+                        return response.text().then(text => {
+                            console.error('💡 LED Error details:', text);
+                        });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data) {
+                        console.log('💡 LED Control success:', data);
                     }
                 })
                 .catch(error => {
@@ -2618,6 +2698,7 @@ function getCellCapacity(level, block) {
                 });
         }
 
+<<<<<<< HEAD
         /**
          * แสดงสถานะสำเร็จ - เปลี่ยนช่องเป้าหมายเป็นสีเขียว
          */
@@ -2727,6 +2808,8 @@ function getCellCapacity(level, block) {
                 });
         }
 
+=======
+>>>>>>> parent of 81beaf8 (LED_cor)
           // 🔽 LMS Integration Functions 🔽
         
         /**
@@ -3840,9 +3923,3 @@ window.getCellCapacityInfo = getCellCapacityInfo;
 window.refreshCellCapacities = refreshCellCapacities;
 window.resetPendingJobsFlag = resetPendingJobsFlag;
 window.loadLayoutFromGateway = loadLayoutFromGateway;
-
-// ทำให้ฟังก์ชัน LED ใหม่เป็น global
-window.showJobSuccess = showJobSuccess;
-window.addErrorRedLED = addErrorRedLED;
-window.hardClearLEDs = hardClearLEDs;
-window.controlLEDByActiveJob = controlLEDByActiveJob;
