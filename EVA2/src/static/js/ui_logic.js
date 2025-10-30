@@ -577,13 +577,13 @@ function getCellCapacity(level, block) {
                         cell.className = 'shelf-cell';
                         cell.style.cursor = 'pointer';
                         
-                        // ใช้ onclick แทน addEventListener เพื่อป้องกันการผูกซ้ำ
-                        cell.onclick = () => {
+                        // เพิ่ม click event เฉพาะ active cells
+                        cell.addEventListener('click', () => {
                             const lots = getLotsInCell(level, block);
                             const activeJob = getActiveJob();
                             const targetLotNo = activeJob ? activeJob.lot_no : null;
                             renderCellPreview({ level, block, lots, targetLotNo });
-                        };
+                        });
                     }
                     
                     // Style ทั่วไปสำหรับทุก cell
@@ -1120,10 +1120,6 @@ function getCellCapacity(level, block) {
                 
                 // ตั้งเป็น active job
                 setActiveJob(selectedJob);
-                
-                // ควบคุม LED เฉพาะตอนเลือก job เท่านั้น
-                controlLEDByActiveJob();
-                
                 renderAll();
                 
                 console.log(`✅ Job ${selectedJob.lot_no} activated. Remaining queue size: ${updatedQueue.length}`);
@@ -1771,22 +1767,12 @@ function getCellCapacity(level, block) {
         /**
          * ส่งคำสั่ง Complete Job ไปยัง Server
          */
-        let jobCompletionInProgress = false; // Flag เพื่อป้องกันการเรียกซ้ำ
-        
         function completeCurrentJob() {
-            // ป้องกันการเรียก complete ซ้ำ
-            if (jobCompletionInProgress) {
-                console.log('⚠️ Job completion already in progress, skipping...');
-                return;
-            }
-            
             let activeJob = getActiveJob();
             if (!activeJob) {
                 showNotification('❌ No active job to complete.', 'error');
                 return;
             }
-            
-            jobCompletionInProgress = true; // ตั้ง flag
 
             // ตรวจสอบและเคลียร์ error state ถ้ามี
             if (activeJob.error) {
@@ -1813,20 +1799,6 @@ function getCellCapacity(level, block) {
             // 🔄 ใช้ HTTP API เป็นหลักเพื่อความเสถียร (แทนที่ WebSocket)
             console.log('📤 Sending complete job request via HTTP API...');
             
-            // ปิด error LEDs ก่อน (ถ้ามี) แล้วเปลี่ยนช่องเป้าหมายจากฟ้าเป็นเขียว
-            turnOffErrorLEDs();
-            
-            console.log(`💡 Changing target LED from blue to green: L${activeJob.level}B${activeJob.block}`);
-            fetch('/api/led/control', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    level: activeJob.level.toString(),
-                    block: activeJob.block.toString(),
-                    color: 'green'
-                })
-            }).catch(e => console.warn('Failed to change target to green:', e));
-            
             fetch(`/command/${activeJob.jobId}/complete`, {
                 method: 'POST',
                 headers: {
@@ -1844,9 +1816,6 @@ function getCellCapacity(level, block) {
                 console.log('✅ Job completed successfully via HTTP API:', data);
                 
                 if (data.status === 'success') {
-                    // รีเซ็ต button press flag
-                    buttonPressInProgress = false;
-                    
                     // แสดงสถานะสำเร็จด้วย LED สีเขียว
                     showJobSuccess(activeJob.level, activeJob.block);
                     
@@ -1872,22 +1841,13 @@ function getCellCapacity(level, block) {
                     renderAll();
 
                     // LED จะดับเองหลังจาก 2 วินาทีใน showJobSuccess()
-                    
-                    // รีเซ็ต job completion flag เมื่อสำเร็จ
-                    jobCompletionInProgress = false;
                 } else {
-                    // รีเซ็ต flags ถ้าเกิด error ด้วย
-                    buttonPressInProgress = false;
-                    jobCompletionInProgress = false;
                     throw new Error(data.message || 'Job completion failed');
                 }
             })
             .catch(error => {
                 console.error('❌ Error completing job:', error);
                 showNotification(`❌ Error completing job: ${error.message}. Please try again.`, 'error');
-                // รีเซ็ต flags เมื่อเกิด error
-                buttonPressInProgress = false;
-                jobCompletionInProgress = false;
             });
         }
 
@@ -1972,8 +1932,7 @@ function getCellCapacity(level, block) {
             
             const errorJob = { ...activeJob, error: true, errorType, errorMessage };
             setActiveJob(errorJob);
-            // ไม่เรียก renderAll() ที่นี่ เพื่อป้องกันการ render ซ้ำ
-            // renderAll(); // <- ลบออก
+            renderAll();
 
             if (websocketConnection && websocketConnection.readyState === WebSocket.OPEN) {
                 const message = {
@@ -2016,11 +1975,6 @@ function getCellCapacity(level, block) {
             return buttonMap[buttonIndex] || null;
         }
         
-        // ป้องกันการกดปุ่มซ้ำ
-        let buttonPressInProgress = false;
-        let lastButtonPressTime = 0;
-        const BUTTON_DEBOUNCE_TIME = 1000; // 1 วินาที
-
         /**
          * จัดการเมื่อมีการกดปุ่ม Hardware
          * @param {Object} buttonData - ข้อมูลปุ่มจาก WebSocket
@@ -2028,21 +1982,10 @@ function getCellCapacity(level, block) {
         function handleButtonPress(buttonData) {
             const { button_index, position, timestamp, source } = buttonData;
             
-            // ป้องกันการกดปุ่มซ้ำภายในเวลาสั้น
-            const currentTime = Date.now();
-            if (buttonPressInProgress || (currentTime - lastButtonPressTime < BUTTON_DEBOUNCE_TIME)) {
-                console.log(`🔘 Button press ignored - too soon (debounce: ${BUTTON_DEBOUNCE_TIME}ms)`);
-                return;
-            }
-            
-            buttonPressInProgress = true;
-            lastButtonPressTime = currentTime;
-            
             // Parse position string (e.g., "L1B1" -> level=1, block=1)
             const posMatch = position.match(/L(\d+)B(\d+)/);
             if (!posMatch) {
                 console.log(`⚠️ Invalid position format: ${position}`);
-                buttonPressInProgress = false;
                 return;
             }
             
@@ -2056,7 +1999,6 @@ function getCellCapacity(level, block) {
             if (!activeJob) {
                 console.log('⚠️ No active job - button press ignored');
                 showNotification(`🔘 Button ${button_index} pressed (${position}) - No active job`, 'info');
-                buttonPressInProgress = false;
                 return;
             }
             
@@ -2071,15 +2013,14 @@ function getCellCapacity(level, block) {
                 console.log(`✅ Correct button press! Completing job for Lot ${activeJob.lot_no}`);
                 showNotification(`🔘✅ Correct button! Completing job for Lot ${activeJob.lot_no}...`, 'success');
                 completeCurrentJob();
-                // buttonPressInProgress จะถูกรีเซ็ตใน completeCurrentJob
             } else {
-                // ❌ กดปุ่มผิดตำแหน่ง - เพิ่มสีแดงโดยไม่เรียก renderAll()
+                // ❌ กดปุ่มผิดตำแหน่ง - เพิ่มสีแดงและแสดง error
                 console.log(`❌ Wrong button press! Expected L${expectedLevel}B${expectedBlock}, Got L${actualLevel}B${actualBlock}`);
                 
-                // เพิ่ม LED สีแดงที่ตำแหน่งผิด (ไม่ล้างสีเดิม) - เรียกครั้งเดียว
+                // เพิ่ม LED สีแดงที่ตำแหน่งผิด (ไม่ล้างสีเดิม)
                 addErrorRedLED(actualLevel, actualBlock);
                 
-                // อัปเดต UI classes โดยตรง (ไม่ผ่าน renderAll)
+                // อัปเดต UI: ช่องถูกต้อง (selected-task), ช่องผิด (wrong-location)
                 const correctCell = document.getElementById(`cell-${expectedLevel}-${expectedBlock}`);
                 if (correctCell) {
                     correctCell.classList.add('selected-task');
@@ -2091,14 +2032,9 @@ function getCellCapacity(level, block) {
                     wrongCell.classList.remove('selected-task');
                 }
                 
-                // แสดง notification และ report error (ไม่เรียก renderAll)
+                // แสดง notification และ report error (ใช้รูปแบบ L${level}B${block})
                 showNotification(`🔘❌ Wrong button! Expected: L${expectedLevel}B${expectedBlock}, Got: L${actualLevel}B${actualBlock}`, 'error');
                 reportJobError('WRONG_LOCATION', `Button pressed at wrong location: L${actualLevel}B${actualBlock}, Expected: L${expectedLevel}B${expectedBlock}`);
-                
-                // รีเซ็ต flag หลังจากจัดการ error เสร็จ
-                setTimeout(() => {
-                    buttonPressInProgress = false;
-                }, 500);
             }
         }
         
@@ -2154,6 +2090,8 @@ function getCellCapacity(level, block) {
             if (showMainWithQueue) {
                 // โหมด Main with Queue - แสดงหน้า Main แต่มี notification button
                 console.log('🏠 Rendering Main view with queue notification');
+                // ไม่ควบคุม LED เมื่ออยู่ในโหมด Main with Queue
+                fetch('/api/led/clear', { method: 'POST' }).catch(e => console.warn('LED clear failed:', e));
                 queueSelectionView.style.display = 'none';
                 mainView.style.display = 'flex';
                 renderActiveJob(); // แสดง shelf แบบ full mode
@@ -2161,6 +2099,8 @@ function getCellCapacity(level, block) {
             } else if (queue.length > 0 && !activeJob) {
                 // แสดงหน้า Queue Selection
                 console.log('📋 Rendering Queue Selection view');
+                // ไม่ควบคุม LED เมื่ออยู่ในหน้า Queue Selection เพื่อประหยัดพลังงาน
+                fetch('/api/led/clear', { method: 'POST' }).catch(e => console.warn('LED clear failed:', e));
                 mainView.style.display = 'none';
                 queueSelectionView.style.display = 'block';
                 renderQueueSelectionView(queue);
@@ -2170,8 +2110,7 @@ function getCellCapacity(level, block) {
                 showMainWithQueue = false; // รีเซ็ต flag
                 stopAutoReturnTimer(); // หยุด timer
                 stopActivityDetection(); // หยุดตรวจจับกิจกรรม
-                // ลบการเรียก controlLEDByActiveJob() ที่นี่ เพื่อป้องกันการเรียกซ้ำ
-                // controlLEDByActiveJob(); // <- ลบออก
+                controlLEDByActiveJob(); // ควบคุม LED เฉพาะเมื่อมี active job
                 queueSelectionView.style.display = 'none';
                 mainView.style.display = 'flex';
                 renderActiveJob();
@@ -2231,10 +2170,6 @@ function getCellCapacity(level, block) {
                 setupWebSocket();
                 console.log('✅ WebSocket setup completed');
                 
-                console.log('⏳ Initializing global handlers...');
-                initGlobalHandlers();
-                console.log('✅ Global handlers initialized');
-                
                 // Sync queue จาก backend เพื่อให้แน่ใจว่าข้อมูลตรงกัน
                 console.log('⏳ Syncing queue from backend...');
                 try {
@@ -2286,21 +2221,8 @@ function getCellCapacity(level, block) {
         let websocketConnection = null; // เก็บ WebSocket connection
 
         function setupWebSocket() {
-            // ตรวจสอบว่ามี connection อยู่แล้วหรือไม่
-            if (websocketConnection && 
-                (websocketConnection.readyState === WebSocket.CONNECTING || 
-                 websocketConnection.readyState === WebSocket.OPEN)) {
-                console.log("⚠️ WebSocket already exists, skipping setup");
-                return;
-            }
-            
-            // ปิด connection เก่าถ้ามี
-            if (websocketConnection) {
-                websocketConnection.close();
-                websocketConnection = null;
-            }
-            
             const ws = new WebSocket(`ws://${window.location.host}/ws`);
+            
             websocketConnection = ws;
 
             ws.onopen = function(event) {
@@ -2415,13 +2337,7 @@ function getCellCapacity(level, block) {
                             break;
                         case "job_error":
                             localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(data.payload)); // ใช้ Key ที่ถูกต้อง
-                            
-                            // แสดง error LED โดยตรงโดยไม่เรียก renderAll() ที่อาจทำให้เกิดการเรียก API ซ้ำ
-                            addErrorRedLED(data.payload.level, data.payload.block);
-                            
-                            // อัปเดต UI โดยไม่เรียก renderAll() เต็มรูปแบบ
-                            renderActiveJob(); // แค่อัปเดตส่วน active job
-                            
+                            renderAll();
                             showNotification(`❌ Lot ${data.payload.lot_no} Must place at L${data.payload.level}-B${data.payload.block}`, 'error');
                             break;
                         case "system_reset":
@@ -2512,19 +2428,7 @@ function getCellCapacity(level, block) {
         }
 
         // เพิ่ม event listeners สำหรับ window resize และ full-shelf mode toggle
-        let globalHandlersBound = false; // Flag เพื่อป้องกันการผูก handlers ซ้ำ
-
-        function initGlobalHandlers() {
-            if (globalHandlersBound) {
-                console.log('⚠️ Global handlers already bound, skipping...');
-                return;
-            }
-            
-            globalHandlersBound = true;
-            console.log('🔗 Binding global event handlers...');
-            
-            window.addEventListener('resize', updateCellSizes);
-        }
+        window.addEventListener('resize', updateCellSizes);
         
         // ฟังการเปลี่ยนแปลง full-shelf mode
         const observer = new MutationObserver(function(mutations) {
@@ -2541,39 +2445,26 @@ function getCellCapacity(level, block) {
             observer.observe(mainContainerElement, { attributes: true, attributeFilter: ['class'] });
         }
 
-        // ป้องกันการเรียก LED control ซ้ำ
-        let ledControlInProgress = false;
-        let lastLedControlTime = 0;
-        const LED_CONTROL_DEBOUNCE_TIME = 500; // 0.5 วินาที
-
         /**
-         * ควบคุม LED เฉพาะตอนเลือก job ใหม่เท่านั้น (ไม่เรียกใน render)
-         * แยกออกจาก render cycle เพื่อป้องกันการยิงซ้ำ
+         * ฟังก์ชันควบคุม LED ตามสถานะ active job (ใช้ระบบ state-based buffer ใหม่)
          */
-        function controlLEDByActiveJob() {
-            if (ledControlInProgress) {
-                console.log('⚠️ LED control in progress, skipping...');
-                return;
-            }
-            
-            ledControlInProgress = true;
-            
+        function controlLEDByActiveJob(wrongLocation = null) {
             const activeJob = getActiveJob();
             if (!activeJob) {
                 console.log('💡 No active job - clearing LEDs');
-                hardClearLEDs();
-                ledControlInProgress = false;
+                fetch('/api/led/clear', { method: 'POST' });
                 return;
             }
 
             const level = Number(activeJob.level);
             const block = Number(activeJob.block);
             
-            console.log(`💡 LED Control: Setting target blue for NEW job L${level}B${block}`);
+            console.log(`💡 LED Control: Active job L${level}B${block}, Place=${activeJob.place_flg}`);
 
-            // เคลียร์และตั้งเป้าหมายเป็นสีน้ำเงินเฉพาะตอนเลือก job ใหม่
+            // 1. เคลียร์ LED ก่อนเสมอ (hard_clear)
             fetch('/api/led/clear', { method: 'POST' })
                 .then(() => {
+                    // 2. แสดงช่องเป้าหมายเป็นสีน้ำเงิน (set_target_blue)
                     return fetch('/api/led/control', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -2586,7 +2477,7 @@ function getCellCapacity(level, block) {
                 })
                 .then(response => response.json())
                 .then(data => {
-                     console.log(`💡 Target position set to blue: L${level}B${block}`, data);
+                    console.log(`💡 Target position set to blue: L${level}B${block}`, data);
                     
                     // 3. ถ้าอยู่ใน error state และมีตำแหน่งผิด ให้เพิ่มสีแดงที่ตำแหน่งผิด
                     if (activeJob.error && activeJob.errorType === 'WRONG_LOCATION' && activeJob.errorMessage) {
@@ -2612,9 +2503,6 @@ function getCellCapacity(level, block) {
                 })
                 .catch(error => {
                     console.error('💡 LED Control error:', error);
-                })
-                .finally(() => {
-                    ledControlInProgress = false;
                 });
         }
 
@@ -2637,10 +2525,10 @@ function getCellCapacity(level, block) {
                 .then(data => {
                     console.log(`✅ Success LED shown: L${level}B${block}`, data);
                     
-                    // รอ 2 วินาที แล้วเคลียร์ทั้งหมด (จบงานแล้ว)
+                    // รอ 2 วินาที แล้วเคลียร์
                     setTimeout(() => {
-                        hardClearLEDs(); // ใช้ hard clear และล้าง error tracking
-                        console.log('💡 Job completed - all LEDs cleared');
+                        fetch('/api/led/clear', { method: 'POST' })
+                            .then(() => console.log('💡 Success LED cleared'));
                     }, 2000);
                 })
                 .catch(error => {
@@ -2648,19 +2536,12 @@ function getCellCapacity(level, block) {
                 });
         }
 
-        // ตัวแปรสำหรับติดตาม error LED positions
-        let errorLEDPositions = new Set();
-
         /**
-         * เพิ่มสีแดงเมื่อกดปุ่มผิดตำแหน่ง (ไม่ล้างสีเดิม) - เรียกครั้งเดียว
+         * เพิ่มสีแดงเมื่อกดปุ่มผิดตำแหน่ง (ไม่ล้างสีเดิม)
          */
         function addErrorRedLED(level, block) {
             console.log(`💡 Adding error red LED: L${level}B${block}`);
             
-            // เก็บตำแหน่ง error ไว้
-            errorLEDPositions.add(`${level}-${block}`);
-            
-            // เรียก API ตรงๆ โดยไม่ผ่าน tracking หรือ debounce
             fetch('/api/led/control', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -2680,43 +2561,10 @@ function getCellCapacity(level, block) {
         }
 
         /**
-         * ปิด error LEDs ที่ระบุโดยใช้ turn_off_some API (ไม่กระพริบ)
-         */
-        function turnOffErrorLEDs() {
-            if (errorLEDPositions.size === 0) return;
-            
-            console.log(`💡 Turning off ${errorLEDPositions.size} error LEDs`);
-            
-            // แปลง Set เป็น array ของ positions
-            const positions = Array.from(errorLEDPositions).map(pos => {
-                const [level, block] = pos.split('-');
-                return { level, block };
-            });
-            
-            fetch('/api/led/turn-off', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ positions })
-            })
-                .then(response => response.json())
-                .then(data => {
-                    console.log(`🔄 Error LEDs turned off:`, data);
-                    // ล้าง tracking หลังจากปิดเสร็จ
-                    errorLEDPositions.clear();
-                })
-                .catch(error => {
-                    console.error('💡 Turn off error LEDs failed:', error);
-                });
-        }
-
-        /**
          * Hard clear LEDs เมื่อกดปุ่ม Back
          */
         function hardClearLEDs() {
             console.log('💡 Hard clearing LEDs');
-            
-            // ล้าง error tracking ด้วย
-            errorLEDPositions.clear();
             
             fetch('/api/led/clear', { method: 'POST' })
                 .then(() => {
